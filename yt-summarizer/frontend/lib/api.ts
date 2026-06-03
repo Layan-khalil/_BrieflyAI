@@ -21,7 +21,8 @@ export async function streamSummary(
   onError: (e: string) => void
 ) {
   try {
-    const res = await fetch("http://localhost:8000/api/summarize", {
+    const baseUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
+    const res = await fetch(`${baseUrl}/api/summarize`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url }),

@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 import json
+import os
 
 load_dotenv()
 
@@ -12,10 +13,14 @@ from models import SummarizeRequest
 
 app = FastAPI()
 
-# Configure CORS
+# CORS: allow localhost for dev + any FRONTEND_URL set in production
+origins = ["http://localhost:3000", "http://localhost:3001"]
+if os.getenv("FRONTEND_URL"):
+    origins.append(os.getenv("FRONTEND_URL"))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
