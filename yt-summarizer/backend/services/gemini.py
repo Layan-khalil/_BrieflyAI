@@ -58,18 +58,29 @@ def clean_json_response(text: str, language: str = 'en') -> dict:
 
     return result
 
-def get_prompt(language: str, title: str, transcript: str) -> str:
+def get_prompt(language: str, title: str, transcript: str, duration: int = 0) -> str:
     """Get prompt in specified language"""
 
-    # Limit transcript to avoid token limits
-    transcript_preview = transcript[:35000]
+    # Increase limit for long videos — Gemini 2.5 handles 1M tokens
+    transcript_preview = transcript[:150000]
+
+    duration_hint = ""
+    if duration > 0:
+        mins = duration // 60
+        secs = duration % 60
+        duration_hint = f"\nVideo duration: {mins}:{secs:02d} — the last timestamp MUST be near this time."
 
     if language == 'ar':
-        return f"""قم بتحليل وتلخيص محتوى هذا الفيديو.
+        dur = ""
+        if duration > 0:
+            mins = duration // 60
+            secs = duration % 60
+            dur = f"\nمدة الفيديو: {mins}:{secs:02d} — يجب أن يكون آخر طابع زمني قريباً من هذا الوقت."
+        return f"""قم بتحليل وتلخيص محتوى هذا الفيديو بالكامل.
 
 عنوان الفيديو: {title}
 
-النص: {transcript_preview}
+النص (مع الطوابع الزمنية): {transcript_preview}{dur}
 
 **تعليمات مهمة جداً:**
 - أخرج JSON فقط، بدون أي نص إضافي
@@ -77,6 +88,9 @@ def get_prompt(language: str, title: str, transcript: str) -> str:
 - لا تستخدم علامات ```json أو ```
 - كل النص يجب أن يكون بالعربية: الملخص، الرؤى، الملاحظات، والمواضيع في الطوابع الزمنية
 - لا تكتب أي شيء بالإنجليزية إطلاقاً
+- **استخدم الطوابع الزمنية الحقيقية من النص [MM:SS] — لا تخترع أوقاتاً عشوائية**
+- **وزّع الطوابع الزمنية بالتساوي على الفيديو بالكامل من البداية إلى النهاية**
+- **يجب أن يكون هناك 8-12 طابعاً زمنياً تغطي الفيديو كاملاً**
 
 استخدم هذا التنسيق بالضبط:
 {{
@@ -89,17 +103,20 @@ def get_prompt(language: str, title: str, transcript: str) -> str:
   ]
 }}"""
     else:
-        return f"""Analyze and summarize this video content.
+        return f"""Analyze and summarize this ENTIRE video content from start to finish.
 
 Video Title: {title}
 
-Transcript: {transcript_preview}
+Transcript (with timestamps): {transcript_preview}{duration_hint}
 
 **Important Instructions:**
 - Output ONLY JSON, no additional text
 - Write everything in English only — this is mandatory
 - Do NOT use ```json or ``` markers
 - All text must be in English: summary, insights, notes, and topics in timestamps
+- **Use the REAL timestamps from the transcript [MM:SS] — do NOT invent random times**
+- **Distribute timestamps evenly across the FULL video, from the very beginning to the end**
+- **Generate 8-12 timestamps that cover the entire video duration**
 
 Use this exact format:
 {{
@@ -112,11 +129,11 @@ Use this exact format:
   ]
 }}"""
 
-async def analyze_sync(transcript: str, title: str, language: str = 'en') -> dict:
+async def analyze_sync(transcript: str, title: str, language: str = 'en', duration: int = 0) -> dict:
     """Get analysis from Gemini"""
 
     try:
-        prompt = get_prompt(language, title, transcript)
+        prompt = get_prompt(language, title, transcript, duration)
 
         system_inst = (
             "Respond only in Arabic. All content must be in Arabic."
@@ -125,7 +142,7 @@ async def analyze_sync(transcript: str, title: str, language: str = 'en') -> dic
         )
 
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-2.5-flash",
             contents=prompt,
             config=types.GenerateContentConfig(
                 system_instruction=system_inst
@@ -140,7 +157,7 @@ async def analyze_sync(transcript: str, title: str, language: str = 'en') -> dic
         ):
             retry_prompt = prompt + "\n\n**ملاحظة: يجب أن تكون كل الكلمات بالعربية. أي رد بالإنجليزية غير مقبول.**"
             retry_response = client.models.generate_content(
-                model="gemini-2.0-flash",
+                model="gemini-2.5-flash",
                 contents=retry_prompt,
                 config=types.GenerateContentConfig(
                     system_instruction=system_inst

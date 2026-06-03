@@ -87,7 +87,10 @@ export default function Home() {
     const si = setInterval(() => setLoadStep(prev => Math.min(prev + 1, 3)), 1000);
     try {
       setLoadStep(1);
-      const res = await fetch('http://localhost:8000/api/summarize', {
+      const backendUrl = typeof window !== 'undefined' && window.location.hostname === 'localhost'
+        ? 'http://localhost:8001'
+        : 'https://brieflyai-ggl3.onrender.com';
+      const res = await fetch(`${backendUrl}/api/summarize`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: trimmed, language }),

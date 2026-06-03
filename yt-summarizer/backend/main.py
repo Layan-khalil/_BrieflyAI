@@ -64,7 +64,8 @@ async def summarize(req: SummarizeRequest):
         analysis = await analyze_sync(
             transcript_data["text"],
             metadata["title"],
-            language
+            language,
+            metadata.get("duration", 0)
         )
         
         # Return combined response
