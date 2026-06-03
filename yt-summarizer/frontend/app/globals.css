@@ -1,0 +1,44 @@
+@import "tailwindcss";
+
+:root {
+  --bg:        #0a0912;
+  --bg-card:   #15131f;
+  --bg-card-2: #1a1826;
+  --border:    #262333;
+  --border-2:  #322e44;
+  --text:      #ededf2;
+  --text-dim:  #9b99ab;
+  --text-dim2: #6a6878;
+  --accent:    #8b5cf6;
+  --accent-lt: #a78bfa;
+  --accent-2:  #7c3aed;
+  color-scheme: dark;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+[dir="rtl"] body {
+  font-family: 'IBM Plex Sans Arabic', 'Plus Jakarta Sans', system-ui, sans-serif;
+}
+
+@keyframes pulse-glow {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.18); opacity: .85; }
+}
+@keyframes ring-expand {
+  0% { transform: scale(.6); opacity: .6; }
+  100% { transform: scale(1.25); opacity: 0; }
+}
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
