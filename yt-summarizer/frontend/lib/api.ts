@@ -21,7 +21,8 @@ export async function streamSummary(
   onError: (e: string) => void
 ) {
   try {
-    const baseUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
+    const isLocal = typeof window !== "undefined" && window.location.hostname === "localhost";
+    const baseUrl = isLocal ? "http://localhost:8000" : "https://brieflyai-ggl3.onrender.com";
     const res = await fetch(`${baseUrl}/api/summarize`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
