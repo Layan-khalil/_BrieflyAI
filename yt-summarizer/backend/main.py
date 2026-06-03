@@ -19,14 +19,13 @@ if os.getenv("FRONTEND_URL"):
     origins.append(os.getenv("FRONTEND_URL"))
 
 # Replace your entire origins section with this
-app.add_middleware(
+aapp.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 @app.post("/api/summarize")
 async def summarize(req: SummarizeRequest):
     try:
