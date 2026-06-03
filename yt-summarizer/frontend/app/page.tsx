@@ -48,7 +48,9 @@ export default function Home() {
     document.documentElement.lang = language;
     document.documentElement.dir = language === 'ar' ? 'rtl' : 'ltr';
   }, [language]);
-
+  useEffect(() => {
+    fetch('https://brieflyai-ggl3.onrender.com/health');
+  }, []);
   const showToast = useCallback((msg: string) => {
     setToast(msg);
     if (t.current) clearTimeout(t.current);
