@@ -91,7 +91,7 @@ export default function Home() {
       setLoadStep(1);
       const backendUrl = typeof window !== 'undefined' && window.location.hostname === 'localhost'
         ? 'http://localhost:8001'
-        : 'https://brieflyai-ggl3.onrender.com';
+        : ': 'https://brieflyai.up.railway.app';
       const res = await fetch(`${backendUrl}/api/summarize`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
