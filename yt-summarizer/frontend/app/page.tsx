@@ -49,7 +49,7 @@ export default function Home() {
     document.documentElement.dir = language === 'ar' ? 'rtl' : 'ltr';
   }, [language]);
   useEffect(() => {
-    fetch('https://brieflyai-ggl3.onrender.com/health');
+    fetch('https://brieflyai.up.railway.app/health');
   }, []);
   const showToast = useCallback((msg: string) => {
     setToast(msg);
