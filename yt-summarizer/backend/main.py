@@ -94,7 +94,7 @@ async def summarize(req: SummarizeRequest):
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error in summarize: {e}")
+        import traceback; traceback.print_exc()
         language = req.language if hasattr(req, 'language') else 'en'
         if language == 'ar':
             return {

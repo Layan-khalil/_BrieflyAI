@@ -1,15 +1,16 @@
 import re
-import yt_dlp
+import sys
 
 def get_video_metadata(url: str) -> dict:
-    """Extract video metadata using yt-dlp"""
-    ydl_opts = {
-        'quiet': True,
-        'no_warnings': True,
-        'extract_flat': True,  # Faster extraction
-    }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        try:
+    """Extract video metadata using yt-dlp (falls back to defaults on failure)."""
+    try:
+        import yt_dlp
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'extract_flat': True,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             return {
                 'title': info.get('title', 'Unknown'),
@@ -17,8 +18,9 @@ def get_video_metadata(url: str) -> dict:
                 'channel': info.get('uploader', 'Unknown'),
                 'thumbnail': info.get('thumbnail', '')
             }
-        except Exception as e:
-            raise Exception(f'Could not fetch metadata: {e}')
+    except Exception as e:
+        print(f"Metadata fetch error: {type(e).__name__}: {e}", file=sys.stderr)
+        return {'title': 'Unknown', 'duration': 0, 'channel': 'Unknown', 'thumbnail': ''}
 
 def extract_video_id(url: str) -> str:
     """Extract YouTube video ID from URL"""
