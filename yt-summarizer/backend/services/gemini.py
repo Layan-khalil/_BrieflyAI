@@ -3,6 +3,7 @@ from google.genai import types
 import os
 import json
 import re
+import asyncio
 
 # Initialize Gemini client
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
@@ -10,59 +11,42 @@ client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 # Arabic Unicode range
 ARABIC_RE = re.compile(r'[؀-ۿ]')
 
+
 def contains_arabic(text: str) -> bool:
-    """Check if text contains Arabic characters"""
     return bool(ARABIC_RE.search(text))
 
-def clean_json_response(text: str, language: str = 'en') -> dict:
-    """Extract and parse JSON from response"""
-    if not text:
-        return {
-            "summary": "No response from AI",
-            "key_insights": [],
-            "bullet_notes": [],
-            "timestamps": []
-        }
 
-    # Remove markdown code blocks
+def clean_json_response(text: str, language: str = 'en') -> dict:
+    if not text:
+        return {"summary": "No response from AI", "key_insights": [], "bullet_notes": [], "timestamps": []}
+
     text = re.sub(r'```json\s*', '', text)
     text = re.sub(r'```\s*', '', text)
 
-    # Find JSON object
     json_match = re.search(r'\{[\s\S]*\}', text)
     if json_match:
         text = json_match.group(0)
 
-    # Parse JSON
     try:
         result = json.loads(text)
     except json.JSONDecodeError:
-        return {
-            "summary": "Could not parse response. Please try again.",
-            "key_insights": [],
-            "bullet_notes": [],
-            "timestamps": []
-        }
+        return {"summary": "Could not parse response. Please try again.", "key_insights": [], "bullet_notes": [], "timestamps": []}
 
-    # Validate language compliance for Arabic requests
     if language == 'ar':
         text_fields = [result.get('summary', '')]
         text_fields.extend(result.get('key_insights', []))
         text_fields.extend(result.get('bullet_notes', []))
         text_fields.extend(t.get('topic', '') for t in result.get('timestamps', []))
-
         non_arabic = [t for t in text_fields if t and not contains_arabic(t)]
         if len(non_arabic) > len(text_fields) // 2:
-            # Signal to caller that Arabic validation failed
             return {"_arabic_failed": True}
 
     return result
 
-def get_prompt(language: str, title: str, transcript: str, duration: int = 0) -> str:
-    """Get prompt in specified language"""
 
-    # Increase limit for long videos — Gemini 2.5 handles 1M tokens
-    transcript_preview = transcript[:150000]
+def get_prompt(language: str, title: str, transcript: str, duration: int = 0) -> str:
+    # Cap at 80K — plenty for any video, keeps responses fast
+    transcript_preview = transcript[:80000]
 
     duration_hint = ""
     if duration > 0:
@@ -88,18 +72,24 @@ def get_prompt(language: str, title: str, transcript: str, duration: int = 0) ->
 - لا تستخدم علامات ```json أو ```
 - كل النص يجب أن يكون بالعربية: الملخص، الرؤى، الملاحظات، والمواضيع في الطوابع الزمنية
 - لا تكتب أي شيء بالإنجليزية إطلاقاً
-- **استخدم الطوابع الزمنية الحقيقية من النص [MM:SS] — لا تخترع أوقاتاً عشوائية**
+- **استخدم الطوابع الزمنية الحقيقية من النص — لا تخترع أوقاتاً عشوائية**
 - **وزّع الطوابع الزمنية بالتساوي على الفيديو بالكامل من البداية إلى النهاية**
-- **يجب أن يكون هناك 8-12 طابعاً زمنياً تغطي الفيديو كاملاً**
+- **يجب أن يكون هناك 5-8 طوابع زمنية تغطي الفيديو كاملاً**
+- **اجعل وصف كل طابع زمني محدداً ومفصلاً — صف موضوع الجزء بدقة**
 
-استخدم هذا التنسيق بالضبط:
+مثال صحيح للطوابع الزمنية:
+{{"time": "0:00", "topic": "مقدمة: شرح المشكلة الأساسية التي يعالجها الفيديو"}}
+{{"time": "3:15", "topic": "الخطوة الأولى: كيفية تثبيت الأدوات المطلوبة على نظام التشغيل"}}
+{{"time": "7:30", "topic": "تطبيق عملي: كتابة الكود وتجربته على بيانات حقيقية"}}
+
+استخدم هذا التنسيق:
 {{
   "summary": "ملخص الفيديو في 2-3 جمل بالعربية",
-  "key_insights": ["رؤية أولى", "رؤية ثانية", "رؤية ثالثة", "رؤية رابعة", "رؤية خامسة"],
-  "bullet_notes": ["ملاحظة أولى", "ملاحظة ثانية", "ملاحظة ثالثة", "ملاحظة رابعة", "ملاحظة خامسة"],
+  "key_insights": ["رؤية أولى محددة", "رؤية ثانية محددة", "رؤية ثالثة محددة", "رؤية رابعة محددة", "رؤية خامسة محددة"],
+  "bullet_notes": ["ملاحظة أولى محددة", "ملاحظة ثانية محددة", "ملاحظة ثالثة محددة", "ملاحظة رابعة محددة", "ملاحظة خامسة محددة"],
   "timestamps": [
-    {{"time": "0:00", "topic": "الموضوع الأول"}},
-    {{"time": "5:30", "topic": "الموضوع الثاني"}}
+    {{"time": "0:00", "topic": "وصف محدد ومفصل لما يُقال في هذا الجزء"}},
+    {{"time": "5:30", "topic": "وصف محدد ومفصل للجزء التالي"}}
   ]
 }}"""
     else:
@@ -114,23 +104,173 @@ Transcript (with timestamps): {transcript_preview}{duration_hint}
 - Write everything in English only — this is mandatory
 - Do NOT use ```json or ``` markers
 - All text must be in English: summary, insights, notes, and topics in timestamps
-- **Use the REAL timestamps from the transcript [MM:SS] — do NOT invent random times**
-- **Distribute timestamps evenly across the FULL video, from the very beginning to the end**
-- **Generate 8-12 timestamps that cover the entire video duration**
+- **Use the REAL timestamps from the transcript — do NOT invent random times**
+- **Distribute timestamps evenly across the FULL video, from beginning to end**
+- **Generate 5-8 timestamps that cover the entire video duration**
+- **Make each timestamp topic SPECIFIC and detailed — describe what's actually said at that point, not a generic section title**
+
+Correct timestamp example:
+{{"time": "0:00", "topic": "Introduction: the speaker explains the core problem this video solves"}}
+{{"time": "3:15", "topic": "Step 1: installing the required tools and setting up the environment"}}
+{{"time": "7:30", "topic": "Hands-on demo: writing the actual code and testing with real data"}}
 
 Use this exact format:
 {{
   "summary": "2-3 sentence summary of the video in English",
-  "key_insights": ["insight 1", "insight 2", "insight 3", "insight 4", "insight 5"],
-  "bullet_notes": ["note 1", "note 2", "note 3", "note 4", "note 5"],
+  "key_insights": ["specific insight 1", "specific insight 2", "specific insight 3", "specific insight 4", "specific insight 5"],
+  "bullet_notes": ["specific note 1", "specific note 2", "specific note 3", "specific note 4", "specific note 5"],
   "timestamps": [
-    {{"time": "0:00", "topic": "First topic"}},
-    {{"time": "5:30", "topic": "Second topic"}}
+    {{"time": "0:00", "topic": "Specific detailed description of what's covered here"}},
+    {{"time": "5:30", "topic": "Specific detailed description of the next section"}}
   ]
 }}"""
 
+
+def get_audio_prompt(language: str, title: str, duration: int = 0) -> str:
+    """Prompt for direct audio-to-structured-analysis — no separate transcript step."""
+    duration_hint = ""
+    if duration > 0:
+        mins = duration // 60
+        secs = duration % 60
+        duration_hint = f"\nVideo duration: {mins}:{secs:02d}"
+
+    if language == 'ar':
+        dur = ""
+        if duration > 0:
+            mins = duration // 60
+            secs = duration % 60
+            dur = f"\nمدة الفيديو: {mins}:{secs:02d}"
+        return f"""استمع إلى هذا الفيديو بالكامل ثم حلله بشكل منظم.
+
+عنوان الفيديو: {title}{dur}
+
+**تعليمات مهمة جداً:**
+- أخرج JSON فقط، بدون أي نص إضافي
+- اكتب كل المحتوى باللغة العربية فقط
+- لا تستخدم علامات ```json أو ```
+- **وزّع الطوابع الزمنية بالتساوي على الفيديو بالكامل**
+- **يجب أن يكون هناك 5-8 طوابع زمنية**
+- **اجعل وصف كل طابع زمني محدداً ومفصلاً**
+
+استخدم هذا التنسيق:
+{{
+  "summary": "ملخص الفيديو في 2-3 جمل بالعربية",
+  "key_insights": ["رؤية أولى محددة", "رؤية ثانية محددة", "رؤية ثالثة محددة", "رؤية رابعة محددة", "رؤية خامسة محددة"],
+  "bullet_notes": ["ملاحظة أولى محددة", "ملاحظة ثانية محددة", "ملاحظة ثالثة محددة", "ملاحظة رابعة محددة", "ملاحظة خامسة محددة"],
+  "timestamps": [
+    {{"time": "0:00", "topic": "وصف محدد ومفصل لما يُقال في هذا الجزء"}},
+    {{"time": "5:30", "topic": "وصف محدد ومفصل للجزء التالي"}}
+  ]
+}}"""
+    else:
+        return f"""Listen to this entire video and provide a structured analysis.
+
+Video Title: {title}{duration_hint}
+
+**Important Instructions:**
+- Output ONLY JSON, no additional text
+- Write everything in English only
+- Do NOT use ```json or ``` markers
+- **Distribute timestamps evenly across the FULL video**
+- **Generate 5-8 timestamps**
+- **Make each timestamp topic SPECIFIC and detailed**
+
+Use this exact format:
+{{
+  "summary": "2-3 sentence summary of the video in English",
+  "key_insights": ["specific insight 1", "specific insight 2", "specific insight 3", "specific insight 4", "specific insight 5"],
+  "bullet_notes": ["specific note 1", "specific note 2", "specific note 3", "specific note 4", "specific note 5"],
+  "timestamps": [
+    {{"time": "0:00", "topic": "Specific detailed description of what's covered here"}},
+    {{"time": "5:30", "topic": "Specific detailed description of the next section"}}
+  ]
+}}"""
+
+
+def analyze_from_audio(audio_path: str, title: str, language: str = 'en', duration: int = 0) -> dict:
+    """Upload audio to Gemini and get structured analysis in one API call — no separate transcript step.
+
+    This is faster for no-subtitle videos: 1 API call instead of transcribe + analyze.
+    """
+    try:
+        uploaded = client.files.upload(file=audio_path)
+        prompt = get_audio_prompt(language, title, duration)
+
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[prompt, uploaded]
+        )
+
+        text = response.text.strip()
+        if not text:
+            return {"_error": True}
+
+        result = clean_json_response(text, language)
+
+        # If Arabic validation failed, retry once
+        if result.get("_arabic_failed") or (
+            language == 'ar' and not contains_arabic(result.get('summary', ''))
+        ):
+            retry_prompt = prompt + "\n\n**ملاحظة: يجب أن تكون كل الكلمات بالعربية. أي رد بالإنجليزية غير مقبول.**"
+            retry_uploaded = client.files.upload(file=audio_path)
+            retry_response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[retry_prompt, retry_uploaded]
+            )
+            result = clean_json_response(retry_response.text, language)
+
+        result.pop("_arabic_failed", None)
+        result.pop("_error", None)
+        if 'summary' not in result:
+            result['summary'] = "No summary available"
+        if 'key_insights' not in result:
+            result['key_insights'] = []
+        if 'bullet_notes' not in result:
+            result['bullet_notes'] = []
+        if 'timestamps' not in result:
+            result['timestamps'] = []
+
+        return result
+
+    except Exception as e:
+        print(f"Gemini audio analysis error: {type(e).__name__}: {e}")
+        if language == 'ar':
+            return {
+                "summary": "حدث خطأ في تحليل الصوت. يرجى المحاولة مرة أخرى.",
+                "key_insights": ["يرجى المحاولة مرة أخرى"],
+                "bullet_notes": ["يرجى المحاولة مرة أخرى"],
+                "timestamps": []
+            }
+        else:
+            return {
+                "summary": "Error analyzing audio. Please try again.",
+                "key_insights": ["Please try again"],
+                "bullet_notes": ["Please try again"],
+                "timestamps": []
+            }
+
+
+async def _call_gemini(prompt: str, system_inst: str, timeout: int = 60) -> str:
+    """Make an async Gemini API call with timeout."""
+    try:
+        response = await asyncio.wait_for(
+            client.aio.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_inst
+                )
+            ),
+            timeout=timeout
+        )
+        return response.text
+    except asyncio.TimeoutError:
+        print("Gemini API call timed out")
+        raise
+
+
 async def analyze_sync(transcript: str, title: str, language: str = 'en', duration: int = 0) -> dict:
-    """Get analysis from Gemini"""
+    """Get analysis from Gemini using async calls with timeout."""
 
     try:
         prompt = get_prompt(language, title, transcript, duration)
@@ -141,29 +281,16 @@ async def analyze_sync(transcript: str, title: str, language: str = 'en', durati
             else "Respond only in English."
         )
 
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=system_inst
-            )
-        )
-
-        result = clean_json_response(response.text, language)
+        text = await _call_gemini(prompt, system_inst)
+        result = clean_json_response(text, language)
 
         # If Arabic validation failed, retry once with stronger hint
         if result.get("_arabic_failed") or (
             language == 'ar' and not contains_arabic(result.get('summary', ''))
         ):
             retry_prompt = prompt + "\n\n**ملاحظة: يجب أن تكون كل الكلمات بالعربية. أي رد بالإنجليزية غير مقبول.**"
-            retry_response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=retry_prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_inst
-                )
-            )
-            result = clean_json_response(retry_response.text, language)
+            retry_text = await _call_gemini(retry_prompt, system_inst)
+            result = clean_json_response(retry_text, language)
 
         # Ensure required fields exist
         result.pop("_arabic_failed", None)

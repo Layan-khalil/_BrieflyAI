@@ -90,7 +90,7 @@ export default function Home() {
     try {
       setLoadStep(1);
       const backendUrl = typeof window !== 'undefined' && window.location.hostname === 'localhost'
-        ? 'http://localhost:8001'
+        ? 'http://localhost:8002'
         : 'https://brieflyai.up.railway.app';
       const res = await fetch(`${backendUrl}/api/summarize`, {
         method: 'POST',
@@ -377,7 +377,7 @@ export default function Home() {
                   </div>
                   <div className="min-w-0 flex-1">
                     <h3 className="text-[15px] font-bold mb-1.5">{T('Summary', 'الملخص')}</h3>
-                    <p className="text-[13.5px] leading-relaxed" style={{ color: '#9b99ab' }}>{data.summary}</p>
+                    <p className="text-[13.5px] leading-relaxed" style={{ color: '#9b99ab' }} dir={language === 'ar' ? 'rtl' : undefined}>{data.summary}</p>
                   </div>
                 </div>
 
@@ -391,8 +391,8 @@ export default function Home() {
                       <h3 className="text-[15px] font-bold mb-1.5">{T('Key Insights', 'أهم الرؤى')}</h3>
                       <ul className="flex flex-col gap-1.5 list-none p-0 m-0">
                         {data.key_insights.map((insight, i) => (
-                          <li key={i} className="relative pl-4 text-[13.5px] leading-relaxed" style={{ color: '#9b99ab' }}>
-                            <span className="absolute left-0.5 top-2 w-[5px] h-[5px] rounded-full" style={{ background: '#6a6878' }} />
+                          <li key={i} className={`relative text-[13.5px] leading-relaxed ${language === 'ar' ? 'pr-4' : 'pl-4'}`} style={{ color: '#9b99ab' }}>
+                            <span className={`absolute top-2 w-[5px] h-[5px] rounded-full ${language === 'ar' ? 'right-0.5' : 'left-0.5'}`} style={{ background: '#6a6878' }} />
                             {insight}
                           </li>
                         ))}
@@ -411,8 +411,8 @@ export default function Home() {
                       <h3 className="text-[15px] font-bold mb-1.5">{T('Detailed Notes', 'ملاحظات مفصلة')}</h3>
                       <ul className="flex flex-col gap-1.5 list-none p-0 m-0">
                         {data.bullet_notes.map((note, i) => (
-                          <li key={i} className="relative pl-4 text-[13.5px] leading-relaxed" style={{ color: '#9b99ab' }}>
-                            <span className="absolute left-0.5 top-2 w-[5px] h-[5px] rounded-full" style={{ background: '#6a6878' }} />
+                          <li key={i} className={`relative text-[13.5px] leading-relaxed ${language === 'ar' ? 'pr-4' : 'pl-4'}`} style={{ color: '#9b99ab' }}>
+                            <span className={`absolute top-2 w-[5px] h-[5px] rounded-full ${language === 'ar' ? 'right-0.5' : 'left-0.5'}`} style={{ background: '#6a6878' }} />
                             {note}
                           </li>
                         ))}
