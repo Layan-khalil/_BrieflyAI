@@ -9,6 +9,7 @@ def get_video_metadata(url: str) -> dict:
             'quiet': True,
             'no_warnings': True,
             'extract_flat': True,
+            'extractor_args': {'youtube': {'player_client': ['android']}},
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)

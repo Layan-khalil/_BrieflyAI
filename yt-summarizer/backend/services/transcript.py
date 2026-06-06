@@ -63,6 +63,7 @@ def _download_subtitles_ytdlp(video_id):
             [sys.executable, "-m", "yt_dlp", "--skip-download",
              "--write-auto-sub", "--sub-langs", "en,ar",
              "--sub-format", "vtt",
+             "--extractor-args", "youtube:player_client=android",
              "-o", os.path.join(tmpdir, "%(id)s"),
              f"https://www.youtube.com/watch?v={video_id}"],
             capture_output=True, text=True, timeout=120
@@ -131,6 +132,7 @@ def _transcribe_audio(video_id):
         result = subprocess.run(
             [sys.executable, "-m", "yt_dlp", "-f", "worstaudio",
              "-x", "--audio-format", "mp3", "--audio-quality", "10",
+             "--extractor-args", "youtube:player_client=android",
              "-o", audio_path + ".%(ext)s",
              f"https://www.youtube.com/watch?v={video_id}"],
             capture_output=True, text=True, timeout=3600
