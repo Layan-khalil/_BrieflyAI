@@ -13,74 +13,190 @@ def format_time(seconds):
 def get_transcript(url):
     video_id = extract_video_id(url)
 
-    # Strategy 1: youtubetranscript.com API (simple REST API, rarely blocked)
+    # Strategy 1: youtubetranscript.com API (third-party, rarely blocked)
     transcript = _fetch_transcript_api(video_id)
     if transcript:
         return transcript
 
-    # Strategy 2: Invidious instances (proxy YouTube data)
+    # Strategy 2: Invidious proxy instances
     transcript = _fetch_invidious(video_id)
     if transcript:
         return transcript
 
-    # Strategy 3: yt-dlp subtitle download
+    # Strategy 3: yt-dlp subtitle download with impersonation
     try:
         return _download_subtitles_ytdlp(video_id)
     except Exception as e:
         print(f"yt-dlp subtitle error: {type(e).__name__}: {e}", file=sys.stderr)
 
-    # Strategy 4: yt-dlp audio + Gemini
-    return _transcribe_audio(video_id)
+    # Strategy 4: Download audio via invidious proxy + Gemini analysis
+    audio = _download_audio_invidious(video_id)
+    if audio['source'] == 'gemini_audio':
+        return audio
+
+    # Strategy 5: yt-dlp audio with impersonation
+    return _transcribe_audio_ytdlp(video_id)
 
 
 def _fetch_transcript_api(video_id):
-    """Use youtubetranscript.com API - a free third-party service that mirrors YouTube transcripts."""
-    urls = [
-        f"https://youtubetranscript.com/?v={video_id}",
-        f"https://youtubetranscript.com/?v={video_id}&format=json",
-    ]
-    for url in urls:
-        try:
-            with httpx.Client(timeout=15, follow_redirects=True) as client:
-                resp = client.get(url, headers={"User-Agent": "Mozilla/5.0"})
-            if resp.status_code == 200:
-                data = resp.json()
-                if isinstance(data, list) and len(data) > 0:
-                    text = ' '.join([f"{format_time(s['seconds'])} {s['text']}" for s in data])
-                    return {'text': text, 'source': 'subtitles'}
-        except Exception as e:
-            print(f"Transcript API error ({url[:40]}): {e}", file=sys.stderr)
+    """Use youtubetranscript.com API."""
+    try:
+        url = f"https://youtubetranscript.com/?v={video_id}&format=json"
+        with httpx.Client(timeout=15, follow_redirects=True) as client:
+            resp = client.get(url, headers={"User-Agent": "Mozilla/5.0"})
+        if resp.status_code == 200:
+            data = resp.json()
+            if isinstance(data, list) and len(data) > 0:
+                text = ' '.join([f"{format_time(s['seconds'])} {s['text']}" for s in data])
+                return {'text': text, 'source': 'subtitles'}
+    except Exception as e:
+        print(f"youtubetranscript error: {e}", file=sys.stderr)
     return None
 
 
 def _fetch_invidious(video_id):
-    """Try Invidious proxy instances."""
+    """Try Invidious proxy instances for captions."""
     instances = [
         f"https://inv.nadeko.net/api/v1/captions/{video_id}",
         f"https://yewtu.be/api/v1/captions/{video_id}",
     ]
-    for instance in instances:
+    for base_url in instances:
         try:
             with httpx.Client(timeout=15) as client:
-                resp = client.get(instance, headers={"User-Agent": "Mozilla/5.0"})
+                resp = client.get(base_url, headers={"User-Agent": "Mozilla/5.0"})
             if resp.status_code == 200:
                 data = resp.json()
-                # Find first English or Arabic caption
                 for caption in data if isinstance(data, list) else []:
                     lang = caption.get('languageCode', '')
-                    if lang in ('en', 'ar', 'en-US', 'en-GB'):
-                        url = caption.get('url') or caption.get('captionUrl', '')
+                    if lang in ('en', 'ar', 'en-US', 'en-GB', 'en-AU'):
+                        url = caption.get('url', '')
                         if url:
                             with httpx.Client(timeout=15) as client:
                                 cr = client.get(url, headers={"User-Agent": "Mozilla/5.0"})
                             if cr.status_code == 200:
-                                # Parse VTT from invidious
                                 segments = _parse_vtt_text(cr.text)
-                                text = ' '.join([f"{format_time(s['start'])} {s['text']}" for s in segments])
-                                return {'text': text, 'source': 'subtitles'}
+                                if segments:
+                                    text = ' '.join([f"{format_time(s['start'])} {s['text']}" for s in segments])
+                                    return {'text': text, 'source': 'subtitles'}
         except Exception as e:
-            print(f"Invidious error: {e}", file=sys.stderr)
+            print(f"Invidious caption error: {e}", file=sys.stderr)
     return None
+
+
+def _download_audio_invidious(video_id):
+    """Get audio stream URL from Invidious, download it, pass to Gemini."""
+    import subprocess, tempfile, os, shutil, glob
+    instances = [
+        "https://inv.nadeko.net",
+        "https://yewtu.be",
+    ]
+    for instance in instances:
+        try:
+            url = f"{instance}/api/v1/videos/{video_id}"
+            with httpx.Client(timeout=15) as client:
+                resp = client.get(url, headers={"User-Agent": "Mozilla/5.0"})
+            if resp.status_code != 200:
+                continue
+
+            data = resp.json()
+            # Find best audio-only format
+            formats = data.get('adaptiveFormats', []) or data.get('formatStreams', [])
+            audio_url = None
+            for fmt in formats:
+                if fmt.get('type', '').startswith('audio') or fmt.get('mimeType', '').startswith('audio'):
+                    audio_url = fmt.get('url') or fmt.get('audioUrl', '')
+                    break
+
+            if not audio_url:
+                continue
+
+            # Download audio
+            tmpdir = tempfile.mkdtemp()
+            audio_path = os.path.join(tmpdir, "audio.mp4")
+            with httpx.Client(timeout=300, follow_redirects=True) as client:
+                resp = client.get(audio_url, headers={"User-Agent": "Mozilla/5.0"})
+            if resp.status_code == 200:
+                with open(audio_path, 'wb') as f:
+                    f.write(resp.content)
+                if os.path.getsize(audio_path) > 1000:
+                    return {'source': 'gemini_audio', 'text': '', 'audio_path': audio_path, '_tmpdir': tmpdir}
+            shutil.rmtree(tmpdir, ignore_errors=True)
+        except Exception as e:
+            print(f"Invidious audio error: {e}", file=sys.stderr)
+    return {'source': 'none', 'text': ''}
+
+
+def _download_subtitles_ytdlp(video_id):
+    """Download auto-generated subtitles using yt-dlp."""
+    import subprocess, tempfile, os, shutil, glob
+    tmpdir = tempfile.mkdtemp()
+    try:
+        cmd = [sys.executable, "-m", "yt_dlp", "--skip-download",
+               "--write-auto-sub", "--sub-langs", "en,ar",
+               "--sub-format", "vtt",
+               "--extractor-args", "youtube:player_client=android",
+               "-o", os.path.join(tmpdir, "%(id)s"),
+               f"https://www.youtube.com/watch?v={video_id}"]
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+
+        vtt_files = glob.glob(os.path.join(tmpdir, "*.vtt"))
+        if not vtt_files:
+            raise Exception("no vtt files found")
+
+        vtt_path = vtt_files[0]
+        segments = _parse_vtt_text(open(vtt_path, 'r', encoding='utf-8').read())
+        text = ' '.join([f"{format_time(s['start'])} {s['text']}" for s in segments])
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        return {'text': text, 'source': 'subtitles'}
+    except:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        raise
+
+
+def _transcribe_audio_ytdlp(video_id):
+    """Download audio via yt-dlp with impersonation."""
+    import subprocess, tempfile, os, shutil, glob
+    tmpdir = tempfile.mkdtemp()
+    try:
+        audio_path = os.path.join(tmpdir, "audio")
+
+        # Find node if available
+        node_path = ""
+        try:
+            nr = subprocess.run(["which", "node"], capture_output=True, text=True, timeout=5)
+            if nr.returncode == 0:
+                node_path = nr.stdout.strip()
+        except:
+            pass
+
+        cmd = [sys.executable, "-m", "yt_dlp", "-f", "worstaudio",
+               "-x", "--audio-format", "mp3", "--audio-quality", "10",
+               "--extractor-args", "youtube:player_client=android",
+               "-o", audio_path + ".%(ext)s",
+               f"https://www.youtube.com/watch?v={video_id}"]
+
+        if node_path:
+            cmd.insert(1, f"--js-runtimes")
+            cmd.insert(2, f"node:{node_path}")
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+
+        if result.returncode != 0:
+            print(f"yt-dlp audio error: {result.stderr[:300]}", file=sys.stderr)
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            return {'source': 'none', 'text': ''}
+
+        files = glob.glob(os.path.join(tmpdir, "*"))
+        if not files:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            return {'source': 'none', 'text': ''}
+
+        return {'source': 'gemini_audio', 'text': '', 'audio_path': files[0], '_tmpdir': tmpdir}
+    except Exception as e:
+        print(f"Audio download error: {type(e).__name__}: {e}", file=sys.stderr)
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        return {'source': 'none', 'text': ''}
 
 
 def _parse_vtt_text(vtt_text):
@@ -106,70 +222,6 @@ def _parse_vtt_text(vtt_text):
     if current_time is not None and current_text:
         segments.append({'start': current_time, 'text': ' '.join(current_text)})
     return segments
-
-
-def _download_subtitles_ytdlp(video_id):
-    """Download auto-generated subtitles using yt-dlp with Android client."""
-    import subprocess, tempfile, os, shutil, glob
-    tmpdir = tempfile.mkdtemp()
-    try:
-        result = subprocess.run(
-            [sys.executable, "-m", "yt_dlp", "--skip-download",
-             "--write-auto-sub", "--sub-langs", "en,ar",
-             "--sub-format", "vtt",
-             "--extractor-args", "youtube:player_client=android",
-             "-o", os.path.join(tmpdir, "%(id)s"),
-             f"https://www.youtube.com/watch?v={video_id}"],
-            capture_output=True, text=True, timeout=120
-        )
-
-        if result.returncode != 0:
-            print(f"yt-dlp subtitle stderr: {result.stderr[:300]}", file=sys.stderr)
-
-        vtt_files = glob.glob(os.path.join(tmpdir, "*.vtt"))
-        if not vtt_files:
-            raise Exception("no vtt files found")
-
-        vtt_path = vtt_files[0]
-        segments = _parse_vtt_text(open(vtt_path, 'r', encoding='utf-8').read())
-        text = ' '.join([f"{format_time(s['start'])} {s['text']}" for s in segments])
-        shutil.rmtree(tmpdir, ignore_errors=True)
-        return {'text': text, 'source': 'subtitles'}
-    except:
-        shutil.rmtree(tmpdir, ignore_errors=True)
-        raise
-
-
-def _transcribe_audio(video_id):
-    """Download audio via yt-dlp then Gemini handles analysis."""
-    import subprocess, tempfile, os, shutil, glob
-    tmpdir = tempfile.mkdtemp()
-    try:
-        audio_path = os.path.join(tmpdir, "audio")
-        result = subprocess.run(
-            [sys.executable, "-m", "yt_dlp", "-f", "worstaudio",
-             "-x", "--audio-format", "mp3", "--audio-quality", "10",
-             "--extractor-args", "youtube:player_client=android",
-             "-o", audio_path + ".%(ext)s",
-             f"https://www.youtube.com/watch?v={video_id}"],
-            capture_output=True, text=True, timeout=3600
-        )
-
-        if result.returncode != 0:
-            print(f"yt-dlp audio error: {result.stderr[:300]}", file=sys.stderr)
-            shutil.rmtree(tmpdir, ignore_errors=True)
-            return {'source': 'none', 'text': ''}
-
-        files = glob.glob(os.path.join(tmpdir, "*"))
-        if not files:
-            shutil.rmtree(tmpdir, ignore_errors=True)
-            return {'source': 'none', 'text': ''}
-
-        return {'source': 'gemini_audio', 'text': '', 'audio_path': files[0], '_tmpdir': tmpdir}
-    except Exception as e:
-        print(f"Audio download error: {type(e).__name__}: {e}", file=sys.stderr)
-        shutil.rmtree(tmpdir, ignore_errors=True)
-        return {'source': 'none', 'text': ''}
 
 
 def extract_video_id(url):
