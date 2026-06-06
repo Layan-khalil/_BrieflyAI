@@ -3,6 +3,7 @@ from google.genai import types
 import os
 import json
 import re
+import sys
 import asyncio
 
 # Initialize Gemini client
@@ -18,19 +19,32 @@ def contains_arabic(text: str) -> bool:
 
 def clean_json_response(text: str, language: str = 'en') -> dict:
     if not text:
+        print(f"Gemini returned empty response", file=sys.stderr)
         return {"summary": "No response from AI", "key_insights": [], "bullet_notes": [], "timestamps": []}
 
+    original = text
+    # Strip markdown code blocks
     text = re.sub(r'```json\s*', '', text)
     text = re.sub(r'```\s*', '', text)
 
+    # Find the first JSON object
     json_match = re.search(r'\{[\s\S]*\}', text)
     if json_match:
         text = json_match.group(0)
 
+    # Normalize line endings inside strings (Gemini sometimes adds literal newlines in string values)
+    text = re.sub(r'(?<="[^"]*)\n(?=[^"]*")', ' ', text)
+
     try:
         result = json.loads(text)
     except json.JSONDecodeError:
-        return {"summary": "Could not parse response. Please try again.", "key_insights": [], "bullet_notes": [], "timestamps": []}
+        # Try again with more aggressive cleaning
+        try:
+            text = re.sub(r',\s*}', '}', text)  # Remove trailing commas
+            result = json.loads(text)
+        except json.JSONDecodeError:
+            print(f"Gemini JSON parse failed. Raw response (first 1000 chars): {original[:1000]}", file=sys.stderr)
+            return {"summary": "Could not parse response. Please try again.", "key_insights": [], "bullet_notes": [], "timestamps": []}
 
     if language == 'ar':
         text_fields = [result.get('summary', '')]
@@ -251,7 +265,7 @@ def analyze_from_audio(audio_path: str, title: str, language: str = 'en', durati
 
 
 async def _call_gemini(prompt: str, system_inst: str, timeout: int = 60) -> str:
-    """Make an async Gemini API call with timeout."""
+    """Make an async Gemini API call with timeout. Falls back to sync on failure."""
     try:
         response = await asyncio.wait_for(
             client.aio.models.generate_content(
@@ -265,8 +279,19 @@ async def _call_gemini(prompt: str, system_inst: str, timeout: int = 60) -> str:
         )
         return response.text
     except asyncio.TimeoutError:
-        print("Gemini API call timed out")
+        print("Gemini API call timed out", file=sys.stderr)
         raise
+    except AttributeError as e:
+        print(f"Async client not available ({e}), falling back to sync", file=sys.stderr)
+        # Fall back to sync API if async isn't supported in this version
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=system_inst
+            )
+        )
+        return response.text
 
 
 async def analyze_sync(transcript: str, title: str, language: str = 'en', duration: int = 0) -> dict:
