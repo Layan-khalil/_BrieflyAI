@@ -4,7 +4,7 @@ import os
 import json
 import re
 import sys
-import asyncio
+import traceback
 
 # Initialize Gemini client
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
@@ -18,44 +18,65 @@ def contains_arabic(text: str) -> bool:
 
 
 def clean_json_response(text: str, language: str = 'en') -> dict:
+    """Try to parse JSON from Gemini response. If all parsing fails, use raw text as summary."""
     if not text:
-        print(f"Gemini returned empty response", file=sys.stderr)
-        return {"summary": "No response from AI", "key_insights": [], "bullet_notes": [], "timestamps": []}
+        return {"summary": "", "key_insights": [], "bullet_notes": [], "timestamps": []}
 
-    original = text
+    original = text.strip()
+    cleaned = original
+
     # Strip markdown code blocks
-    text = re.sub(r'```json\s*', '', text)
-    text = re.sub(r'```\s*', '', text)
+    cleaned = re.sub(r'```json\s*', '', cleaned)
+    cleaned = re.sub(r'```\s*', '', cleaned)
 
-    # Find the first JSON object
-    json_match = re.search(r'\{[\s\S]*\}', text)
+    # Try to find and parse a JSON object
+    json_match = re.search(r'\{[\s\S]*\}', cleaned)
     if json_match:
-        text = json_match.group(0)
-
-    # Normalize line endings inside strings (Gemini sometimes adds literal newlines in string values)
-    text = re.sub(r'(?<="[^"]*)\n(?=[^"]*")', ' ', text)
-
-    try:
-        result = json.loads(text)
-    except json.JSONDecodeError:
-        # Try again with more aggressive cleaning
+        json_str = json_match.group(0)
+        # Aggressive JSON cleaning
+        json_str = re.sub(r',\s*}', '}', json_str)
+        json_str = re.sub(r',\s*]', ']', json_str)
+        json_str = re.sub(r'(?<="[^"]*)\n(?=[^"]*")', ' ', json_str)
         try:
-            text = re.sub(r',\s*}', '}', text)  # Remove trailing commas
-            result = json.loads(text)
-        except json.JSONDecodeError:
-            print(f"Gemini JSON parse failed. Raw response (first 1000 chars): {original[:1000]}", file=sys.stderr)
-            return {"summary": "Could not parse response. Please try again.", "key_insights": [], "bullet_notes": [], "timestamps": []}
+            result = json.loads(json_str)
+            # Validate required fields
+            if 'summary' not in result:
+                result['summary'] = result.get('summary', '')
+            if 'key_insights' not in result:
+                result['key_insights'] = result.get('key_insights', [])
+            if 'bullet_notes' not in result:
+                result['bullet_notes'] = result.get('bullet_notes', [])
+            if 'timestamps' not in result:
+                result['timestamps'] = result.get('timestamps', [])
 
-    if language == 'ar':
-        text_fields = [result.get('summary', '')]
-        text_fields.extend(result.get('key_insights', []))
-        text_fields.extend(result.get('bullet_notes', []))
-        text_fields.extend(t.get('topic', '') for t in result.get('timestamps', []))
-        non_arabic = [t for t in text_fields if t and not contains_arabic(t)]
-        if len(non_arabic) > len(text_fields) // 2:
-            return {"_arabic_failed": True}
+            if language == 'ar':
+                text_fields = [result.get('summary', '')]
+                text_fields.extend(result.get('key_insights', []))
+                text_fields.extend(result.get('bullet_notes', []))
+                text_fields.extend(t.get('topic', '') for t in result.get('timestamps', []))
+                non_arabic = [t for t in text_fields if t and not contains_arabic(t)]
+                if len(non_arabic) > len(text_fields) // 2:
+                    return {"_arabic_failed": True}
 
-    return result
+            return result
+        except (json.JSONDecodeError, Exception):
+            pass
+
+    # Fallback: use the raw response as summary text
+    # Strip any obvious JSON-like wrappers
+    fallback = original
+    fallback = re.sub(r'^```(?:json)?\s*', '', fallback)
+    fallback = re.sub(r'\s*```$', '', fallback)
+    # Limit length
+    if len(fallback) > 2000:
+        fallback = fallback[:2000] + "..."
+
+    return {
+        "summary": fallback,
+        "key_insights": [],
+        "bullet_notes": [],
+        "timestamps": []
+    }
 
 
 def get_prompt(language: str, title: str, transcript: str, duration: int = 0) -> str:
@@ -201,11 +222,78 @@ Use this exact format:
 }}"""
 
 
-def analyze_from_audio(audio_path: str, title: str, language: str = 'en', duration: int = 0) -> dict:
-    """Upload audio to Gemini and get structured analysis in one API call — no separate transcript step.
+def _call_gemini_sync(prompt: str, system_inst: str) -> str:
+    """Call Gemini using the sync API directly."""
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=system_inst
+            )
+        )
+        return response.text
+    except Exception as e:
+        print(f"Gemini sync call error: {type(e).__name__}: {e}", file=sys.stderr)
+        raise
 
-    This is faster for no-subtitle videos: 1 API call instead of transcribe + analyze.
-    """
+
+def analyze_sync(transcript: str, title: str, language: str = 'en', duration: int = 0) -> dict:
+    """Get analysis from Gemini using sync API."""
+    try:
+        prompt = get_prompt(language, title, transcript, duration)
+
+        system_inst = (
+            "Respond only in Arabic. All content must be in Arabic."
+            if language == 'ar'
+            else "Respond only in English."
+        )
+
+        text = _call_gemini_sync(prompt, system_inst)
+        result = clean_json_response(text, language)
+
+        # If Arabic validation failed, retry once with stronger hint
+        if result.get("_arabic_failed") or (
+            language == 'ar' and not contains_arabic(result.get('summary', ''))
+        ):
+            retry_prompt = prompt + "\n\n**ملاحظة: يجب أن تكون كل الكلمات بالعربية. أي رد بالإنجليزية غير مقبول.**"
+            retry_text = _call_gemini_sync(retry_prompt, system_inst)
+            result = clean_json_response(retry_text, language)
+
+        # Ensure required fields exist
+        result.pop("_arabic_failed", None)
+        if 'summary' not in result:
+            result['summary'] = result.get('summary', '')
+        if 'key_insights' not in result:
+            result['key_insights'] = result.get('key_insights', [])
+        if 'bullet_notes' not in result:
+            result['bullet_notes'] = result.get('bullet_notes', [])
+        if 'timestamps' not in result:
+            result['timestamps'] = result.get('timestamps', [])
+
+        return result
+
+    except Exception as e:
+        print(f"Gemini API error: {type(e).__name__}: {e}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        if language == 'ar':
+            return {
+                "summary": "حدث خطأ في تحليل المحتوى. يرجى المحاولة مرة أخرى.",
+                "key_insights": ["يرجى المحاولة مرة أخرى"],
+                "bullet_notes": ["يرجى المحاولة مرة أخرى"],
+                "timestamps": []
+            }
+        else:
+            return {
+                "summary": "Error analyzing content. Please try again.",
+                "key_insights": ["Please try again"],
+                "bullet_notes": ["Please try again"],
+                "timestamps": []
+            }
+
+
+def analyze_from_audio(audio_path: str, title: str, language: str = 'en', duration: int = 0) -> dict:
+    """Upload audio to Gemini and get structured analysis in one API call."""
     try:
         uploaded = client.files.upload(file=audio_path)
         prompt = get_audio_prompt(language, title, duration)
@@ -217,11 +305,10 @@ def analyze_from_audio(audio_path: str, title: str, language: str = 'en', durati
 
         text = response.text.strip()
         if not text:
-            return {"_error": True}
+            return {"summary": "", "key_insights": [], "bullet_notes": [], "timestamps": []}
 
         result = clean_json_response(text, language)
 
-        # If Arabic validation failed, retry once
         if result.get("_arabic_failed") or (
             language == 'ar' and not contains_arabic(result.get('summary', ''))
         ):
@@ -234,20 +321,20 @@ def analyze_from_audio(audio_path: str, title: str, language: str = 'en', durati
             result = clean_json_response(retry_response.text, language)
 
         result.pop("_arabic_failed", None)
-        result.pop("_error", None)
         if 'summary' not in result:
-            result['summary'] = "No summary available"
+            result['summary'] = result.get('summary', '')
         if 'key_insights' not in result:
-            result['key_insights'] = []
+            result['key_insights'] = result.get('key_insights', [])
         if 'bullet_notes' not in result:
-            result['bullet_notes'] = []
+            result['bullet_notes'] = result.get('bullet_notes', [])
         if 'timestamps' not in result:
-            result['timestamps'] = []
+            result['timestamps'] = result.get('timestamps', [])
 
         return result
 
     except Exception as e:
-        print(f"Gemini audio analysis error: {type(e).__name__}: {e}")
+        print(f"Gemini audio analysis error: {type(e).__name__}: {e}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
         if language == 'ar':
             return {
                 "summary": "حدث خطأ في تحليل الصوت. يرجى المحاولة مرة أخرى.",
@@ -258,90 +345,6 @@ def analyze_from_audio(audio_path: str, title: str, language: str = 'en', durati
         else:
             return {
                 "summary": "Error analyzing audio. Please try again.",
-                "key_insights": ["Please try again"],
-                "bullet_notes": ["Please try again"],
-                "timestamps": []
-            }
-
-
-async def _call_gemini(prompt: str, system_inst: str, timeout: int = 60) -> str:
-    """Make an async Gemini API call with timeout. Falls back to sync on failure."""
-    try:
-        response = await asyncio.wait_for(
-            client.aio.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_inst
-                )
-            ),
-            timeout=timeout
-        )
-        return response.text
-    except asyncio.TimeoutError:
-        print("Gemini API call timed out", file=sys.stderr)
-        raise
-    except AttributeError as e:
-        print(f"Async client not available ({e}), falling back to sync", file=sys.stderr)
-        # Fall back to sync API if async isn't supported in this version
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=system_inst
-            )
-        )
-        return response.text
-
-
-async def analyze_sync(transcript: str, title: str, language: str = 'en', duration: int = 0) -> dict:
-    """Get analysis from Gemini using async calls with timeout."""
-
-    try:
-        prompt = get_prompt(language, title, transcript, duration)
-
-        system_inst = (
-            "Respond only in Arabic. All content must be in Arabic."
-            if language == 'ar'
-            else "Respond only in English."
-        )
-
-        text = await _call_gemini(prompt, system_inst)
-        result = clean_json_response(text, language)
-
-        # If Arabic validation failed, retry once with stronger hint
-        if result.get("_arabic_failed") or (
-            language == 'ar' and not contains_arabic(result.get('summary', ''))
-        ):
-            retry_prompt = prompt + "\n\n**ملاحظة: يجب أن تكون كل الكلمات بالعربية. أي رد بالإنجليزية غير مقبول.**"
-            retry_text = await _call_gemini(retry_prompt, system_inst)
-            result = clean_json_response(retry_text, language)
-
-        # Ensure required fields exist
-        result.pop("_arabic_failed", None)
-        if 'summary' not in result:
-            result['summary'] = "No summary available"
-        if 'key_insights' not in result:
-            result['key_insights'] = []
-        if 'bullet_notes' not in result:
-            result['bullet_notes'] = []
-        if 'timestamps' not in result:
-            result['timestamps'] = []
-
-        return result
-
-    except Exception as e:
-        print(f"Gemini API error: {e}")
-        if language == 'ar':
-            return {
-                "summary": "حدث خطأ في تحليل المحتوى. يرجى المحاولة مرة أخرى.",
-                "key_insights": ["يرجى المحاولة مرة أخرى"],
-                "bullet_notes": ["يرجى المحاولة مرة أخرى"],
-                "timestamps": []
-            }
-        else:
-            return {
-                "summary": "Error analyzing content. Please try again.",
                 "key_insights": ["Please try again"],
                 "bullet_notes": ["Please try again"],
                 "timestamps": []

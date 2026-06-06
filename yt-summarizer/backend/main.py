@@ -28,7 +28,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 @app.post("/api/summarize")
-async def summarize(req: SummarizeRequest):
+def summarize(req: SummarizeRequest):
     try:
         # Get language from request
         language = req.language if hasattr(req, 'language') else 'en'
@@ -77,7 +77,7 @@ async def summarize(req: SummarizeRequest):
             }
 
         # Subtitles available: analyze transcript with Gemini
-        analysis = await analyze_sync(
+        analysis = analyze_sync(
             transcript_data["text"],
             metadata["title"],
             language,
