@@ -18,10 +18,11 @@ def format_time(seconds):
 def get_transcript(url):
     video_id = extract_video_id(url)
 
+    # Strategy 1: YouTube Transcript API
     try:
         transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
 
-        # Strategy 1: Find manually created transcript in preferred languages
+        # 1a: Find manually created transcript in preferred languages
         try:
             transcript = transcript_list.find_transcript(['en', 'ar'])
             segments = transcript.fetch()
@@ -30,7 +31,7 @@ def get_transcript(url):
         except (NoTranscriptFound, StopIteration):
             pass
 
-        # Strategy 2: Find ANY available transcript (auto-generated or manual)
+        # 1b: Find ANY available transcript
         try:
             transcript = next(iter(transcript_list))
             segments = transcript.fetch()
@@ -44,8 +45,81 @@ def get_transcript(url):
     except Exception as e:
         print(f"Transcript list error: {type(e).__name__}: {e}", file=sys.stderr)
 
-    # All subtitle strategies failed — fall back to audio transcription
+    # Strategy 2: yt-dlp subtitle download (works where YouTube API is blocked)
+    try:
+        return _download_subtitles_ytdlp(video_id)
+    except Exception as e:
+        print(f"yt-dlp subtitle error: {type(e).__name__}: {e}", file=sys.stderr)
+
+    # Strategy 3: Fall back to audio transcription
     return _transcribe_audio(video_id)
+
+
+def _download_subtitles_ytdlp(video_id):
+    """Download auto-generated subtitles using yt-dlp (bypasses YouTube Transcript API)."""
+    tmpdir = tempfile.mkdtemp()
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "yt_dlp", "--skip-download",
+             "--write-auto-sub", "--sub-langs", "en,ar",
+             "--sub-format", "vtt",
+             "-o", os.path.join(tmpdir, "%(id)s"),
+             f"https://www.youtube.com/watch?v={video_id}"],
+            capture_output=True, text=True, timeout=120
+        )
+
+        if result.returncode != 0:
+            print(f"yt-dlp subtitle download stderr: {result.stderr[:500]}", file=sys.stderr)
+
+        # Find the .vtt subtitle file
+        vtt_files = glob.glob(os.path.join(tmpdir, "*.vtt"))
+        if not vtt_files:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            raise Exception("no vtt files found")
+
+        vtt_path = vtt_files[0]
+        segments = _parse_vtt(vtt_path)
+        text = ' '.join([f"{format_time(s['start'])} {s['text']}" for s in segments])
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        return {'text': text, 'source': 'subtitles'}
+    except:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        raise
+
+
+def _parse_vtt(vtt_path):
+    """Parse a .vtt subtitle file into a list of {start, text} segments."""
+    import re
+    segments = []
+    with open(vtt_path, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+
+    ts_pattern = re.compile(r'(\d+):(\d+):(\d+)\.\d+')
+    current_time = None
+    current_text = []
+
+    for line in lines:
+        line = line.strip()
+        match = ts_pattern.search(line)
+        if match:
+            if current_time is not None and current_text:
+                segments.append({
+                    'start': current_time,
+                    'text': ' '.join(current_text)
+                })
+            h, m, s = int(match.group(1)), int(match.group(2)), int(match.group(3))
+            current_time = h * 3600 + m * 60 + s
+            current_text = []
+        elif line and not line.startswith('WEBVTT') and not line.startswith('NOTE') and not line.startswith('Kind:') and not line.startswith('Language:'):
+            current_text.append(line.replace('&gt;', '>').replace('&lt;', '<').replace('&amp;', '&'))
+
+    if current_time is not None and current_text:
+        segments.append({
+            'start': current_time,
+            'text': ' '.join(current_text)
+        })
+
+    return segments
 
 
 def _transcribe_audio(video_id):
