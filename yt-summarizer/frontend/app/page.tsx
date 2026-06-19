@@ -63,7 +63,7 @@ export default function Home() {
     document.documentElement.dir = language === 'ar' ? 'rtl' : 'ltr';
   }, [language]);
   useEffect(() => {
-    fetch('https://brieflyai.up.railway.app/health');
+    fetch((process.env.NEXT_PUBLIC_BACKEND_URL || 'https://brieflyai.up.railway.app') + '/health');
   }, []);
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -105,7 +105,7 @@ export default function Home() {
       setLoadStep(1);
       const backendUrl = typeof window !== 'undefined' && window.location.hostname === 'localhost'
         ? 'http://localhost:8002'
-        : 'https://brieflyai.up.railway.app';
+        : (process.env.NEXT_PUBLIC_BACKEND_URL || 'https://brieflyai.up.railway.app');
       const res = await fetch(`${backendUrl}/api/summarize`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
