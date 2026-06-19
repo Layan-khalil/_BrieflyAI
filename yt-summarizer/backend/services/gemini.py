@@ -6,7 +6,7 @@ import traceback
 import httpx
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_URL = "https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent"
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
 
 # Arabic Unicode range
 ARABIC_RE = re.compile(r'[؀-ۿ]')
@@ -31,7 +31,6 @@ def extract_json(text: str) -> dict | None:
     json_str = json_match.group(0)
     json_str = re.sub(r',\s*}', '}', json_str)
     json_str = re.sub(r',\s*]', ']', json_str)
-    json_str = re.sub(r'(?<="[^"]*)\n(?=[^"]*")', ' ', json_str)
 
     try:
         return json.loads(json_str)
@@ -54,7 +53,10 @@ def ensure_fields(result: dict) -> dict:
 def call_gemini(prompt: str) -> str:
     """Call Gemini directly via REST API. No SDK dependency."""
     payload = {
-        "contents": [{"parts": [{"text": prompt}]}]
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "thinkingConfig": {"thinkingBudget": 0}
+        }
     }
 
     with httpx.Client(timeout=120) as client:
@@ -73,7 +75,9 @@ def call_gemini(prompt: str) -> str:
     if not candidates:
         raise Exception("No candidates in Gemini response")
 
-    text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+    parts = candidates[0].get("content", {}).get("parts", [])
+    text_parts = [p for p in parts if not p.get("thought", False)]
+    text = text_parts[0].get("text", "") if text_parts else ""
     print(f"[Gemini] Response ({len(text)} chars): {text[:500]}", file=sys.stderr)
     return text
 
@@ -201,6 +205,47 @@ Use this exact format:
 }}"""
 
 
+def analyze_from_youtube_url(video_url: str, title: str, language: str = 'en', duration: int = 0) -> dict:
+    """Analyze a YouTube video directly via Gemini's native YouTube URL support.
+    Raises GeminiYouTubeError if Gemini cannot access the video, so callers can fall back."""
+    prompt = get_audio_prompt(language, title, duration)
+    payload = {
+        "contents": [{
+            "parts": [
+                {"text": prompt},
+                {"fileData": {"mimeType": "video/mp4", "fileUri": video_url}}
+            ]
+        }],
+        "generationConfig": {"thinkingConfig": {"thinkingBudget": 0}}
+    }
+
+    with httpx.Client(timeout=180) as client:
+        resp = client.post(
+            f"{GEMINI_URL}?key={GEMINI_API_KEY}",
+            json=payload,
+            headers={"Content-Type": "application/json"}
+        )
+
+    if resp.status_code != 200:
+        raise Exception(f"Gemini YouTube URL failed: {resp.status_code}: {resp.text[:300]}")
+
+    candidates = resp.json().get("candidates", [])
+    if not candidates:
+        raise Exception("No candidates in Gemini response")
+
+    parts = candidates[0].get("content", {}).get("parts", [])
+    text_parts = [p for p in parts if not p.get("thought", False)]
+    text = text_parts[0].get("text", "") if text_parts else ""
+    print(f"[Gemini YouTube] Response ({len(text)} chars): {text[:300]}", file=sys.stderr)
+
+    result = extract_json(text)
+    if result is None:
+        # Gemini responded but couldn't access the video — signal the caller to fall back
+        raise Exception(f"Gemini could not access YouTube URL: {text[:200]}")
+
+    return ensure_fields(result)
+
+
 def analyze_sync(transcript: str, title: str, language: str = 'en', duration: int = 0) -> dict:
     try:
         prompt = get_prompt(language, title, transcript, duration)
@@ -246,92 +291,113 @@ def analyze_sync(transcript: str, title: str, language: str = 'en', duration: in
 
 
 def analyze_from_audio(audio_path: str, title: str, language: str = 'en', duration: int = 0) -> dict:
-    """Upload audio to Gemini via REST API."""
-    try:
-        # Upload file via Gemini REST API
-        import mimetypes
-        file_name = os.path.basename(audio_path)
-        mime_type = mimetypes.guess_type(audio_path)[0] or "audio/mpeg"
+    """Upload audio to Gemini Files API, wait for it to be ready, then analyze."""
+    import mimetypes, time
 
-        # Step 1: Initiate upload
-        upload_url = f"https://generativelanguage.googleapis.com/upload/v1beta/files?key={GEMINI_API_KEY}"
-        headers = {
+    def _error(msg_en, msg_ar):
+        return {"summary": msg_ar if language == 'ar' else msg_en,
+                "key_insights": [], "bullet_notes": [], "timestamps": []}
+
+    try:
+        file_size = os.path.getsize(audio_path)
+        mime_type = mimetypes.guess_type(audio_path)[0] or "audio/mp4"
+        display_name = os.path.basename(audio_path)
+        print(f"[Gemini Audio] Uploading {display_name} ({file_size} bytes)", file=sys.stderr)
+
+        # ── Step 1: Initiate resumable upload ──────────────────────────────
+        init_url = f"https://generativelanguage.googleapis.com/upload/v1beta/files?key={GEMINI_API_KEY}"
+        init_headers = {
             "X-Goog-Upload-Protocol": "resumable",
             "X-Goog-Upload-Command": "start",
-            "X-Goog-Upload-Header-Content-Length": str(os.path.getsize(audio_path)),
+            "X-Goog-Upload-Header-Content-Length": str(file_size),
             "X-Goog-Upload-Header-Content-Type": mime_type,
             "Content-Type": "application/json",
         }
-        metadata = json.dumps({"file": {"display_name": file_name}})
-
         with httpx.Client(timeout=30) as client:
-            resp = client.post(upload_url, headers=headers, content=metadata)
+            r1 = client.post(init_url, headers=init_headers,
+                             content=json.dumps({"file": {"display_name": display_name}}))
 
-        if resp.status_code != 200:
-            raise Exception(f"Upload initiation failed: {resp.status_code}")
+        if r1.status_code != 200:
+            raise Exception(f"Upload initiation failed: {r1.status_code}: {r1.text[:200]}")
 
-        upload_info = resp.json()
-        file_uri = upload_info.get("file", {}).get("uri") or upload_info.get("file", {}).get("name")
-        upload_url_actual = resp.headers.get("X-Goog-Upload-URL", "")
+        # The resumable upload URL comes from the response header
+        resumable_url = r1.headers.get("X-Goog-Upload-URL", "")
+        if not resumable_url:
+            raise Exception("No X-Goog-Upload-URL in initiation response")
 
-        # Step 2: Upload binary
+        # ── Step 2: Upload the audio bytes ─────────────────────────────────
         with open(audio_path, "rb") as f:
-            audio_data = f.read()
+            audio_bytes = f.read()
 
         upload_headers = {
-            "Content-Length": str(len(audio_data)),
-            "X-Goog-Upload-Protocol": "resumable",
+            "Content-Length": str(len(audio_bytes)),
             "X-Goog-Upload-Command": "upload, finalize",
             "X-Goog-Upload-Offset": "0",
         }
-
         with httpx.Client(timeout=300) as client:
-            resp2 = client.post(upload_url_actual, headers=upload_headers, content=audio_data)
+            r2 = client.post(resumable_url, headers=upload_headers, content=audio_bytes)
 
-        if resp2.status_code != 200:
-            raise Exception(f"Upload failed: {resp2.status_code}")
+        if r2.status_code not in (200, 201):
+            raise Exception(f"Upload failed: {r2.status_code}: {r2.text[:200]}")
 
-        file_info = resp2.json()
-        file_uri = file_info.get("file", {}).get("uri") or file_info.get("file", {}).get("name", "")
-        if not file_uri or not file_uri.startswith("files/"):
-            file_uri = f"files/{file_uri}" if not file_uri.startswith("files/") else file_uri
+        file_data = r2.json().get("file", {})
+        file_name_id = file_data.get("name", "")   # e.g. "files/abc123"
+        file_uri    = file_data.get("uri", "")      # full https:// URI
+        print(f"[Gemini Audio] Uploaded: {file_name_id}", file=sys.stderr)
 
-        # Step 3: Generate content with the uploaded file
+        if not file_uri:
+            raise Exception(f"No file URI in upload response: {r2.json()}")
+
+        # ── Step 3: Poll until ACTIVE (large files need processing time) ───
+        state_url = f"https://generativelanguage.googleapis.com/v1beta/{file_name_id}?key={GEMINI_API_KEY}"
+        for attempt in range(12):
+            time.sleep(3)
+            with httpx.Client(timeout=15) as client:
+                rs = client.get(state_url)
+            if rs.status_code == 200:
+                state = rs.json().get("state", "")
+                print(f"[Gemini Audio] File state: {state}", file=sys.stderr)
+                if state == "ACTIVE":
+                    break
+                if state == "FAILED":
+                    raise Exception("Gemini file processing failed")
+        else:
+            raise Exception("File did not become ACTIVE in time")
+
+        # ── Step 4: Generate content ────────────────────────────────────────
         prompt = get_audio_prompt(language, title, duration)
-
         payload = {
             "contents": [{
                 "parts": [
                     {"text": prompt},
                     {"fileData": {"mimeType": mime_type, "fileUri": file_uri}}
                 ]
-            }]
+            }],
+            "generationConfig": {"thinkingConfig": {"thinkingBudget": 0}}
         }
 
-        with httpx.Client(timeout=120) as client:
-            resp3 = client.post(
+        with httpx.Client(timeout=180) as client:
+            r3 = client.post(
                 f"{GEMINI_URL}?key={GEMINI_API_KEY}",
                 json=payload,
                 headers={"Content-Type": "application/json"}
             )
 
-        if resp3.status_code != 200:
-            raise Exception(f"Content generation failed: {resp3.status_code}: {resp3.text[:300]}")
+        if r3.status_code != 200:
+            raise Exception(f"Content generation failed: {r3.status_code}: {r3.text[:300]}")
 
-        data = resp3.json()
-        candidates = data.get("candidates", [])
+        candidates = r3.json().get("candidates", [])
         if not candidates:
-            raise Exception("No candidates in response")
+            raise Exception("No candidates in Gemini response")
 
-        text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+        parts = candidates[0].get("content", {}).get("parts", [])
+        text_parts = [p for p in parts if not p.get("thought", False)]
+        text = text_parts[0].get("text", "") if text_parts else ""
         print(f"[Gemini Audio] Response ({len(text)} chars): {text[:500]}", file=sys.stderr)
 
         result = extract_json(text)
         if result is None:
-            if language == 'ar':
-                return {"summary": "حدث خطأ في تحليل الصوت.", "key_insights": [], "bullet_notes": [], "timestamps": []}
-            else:
-                return {"summary": "Error analyzing audio.", "key_insights": [], "bullet_notes": [], "timestamps": []}
+            return _error("Error analyzing audio. Please try again.", "حدث خطأ في تحليل الصوت.")
 
         return ensure_fields(result)
 

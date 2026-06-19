@@ -6,9 +6,9 @@ import os
 
 load_dotenv()
 
-from services.transcript import get_transcript
+from services.transcript import get_transcript, _transcribe_audio_ytdlp
 from services.youtube import get_video_metadata
-from services.gemini import analyze_sync, analyze_from_audio
+from services.gemini import analyze_sync, analyze_from_audio, analyze_from_youtube_url
 from models import SummarizeRequest
 import shutil
 
@@ -60,6 +60,49 @@ def summarize(req: SummarizeRequest):
                 "transcript_source": "none",
                 "analysis": no_sub
             }
+
+        # No subtitles: try Gemini's native YouTube URL support first
+        if transcript_data['source'] == 'gemini_youtube':
+            try:
+                analysis = analyze_from_youtube_url(
+                    transcript_data['url'],
+                    metadata["title"],
+                    language,
+                    metadata.get("duration", 0)
+                )
+                return {
+                    "metadata": metadata,
+                    "transcript_source": "gemini",
+                    "analysis": analysis
+                }
+            except Exception as yt_err:
+                # Gemini couldn't access this URL — fall back to downloading audio
+                import sys
+                print(f"[Main] YouTube URL failed ({yt_err}), falling back to audio download", file=sys.stderr)
+                audio_data = _transcribe_audio_ytdlp(transcript_data['url'].split('v=')[-1])
+                if audio_data['source'] == 'gemini_audio':
+                    analysis = analyze_from_audio(
+                        audio_data['audio_path'],
+                        metadata["title"],
+                        language,
+                        metadata.get("duration", 0)
+                    )
+                    shutil.rmtree(audio_data.get('_tmpdir', ''), ignore_errors=True)
+                    return {
+                        "metadata": metadata,
+                        "transcript_source": "gemini",
+                        "analysis": analysis
+                    }
+                # Audio download also failed — nothing we can do
+                if language == 'ar':
+                    return {"metadata": metadata, "transcript_source": "none", "analysis": {
+                        "summary": "تعذر الوصول إلى محتوى هذا الفيديو. يرجى تجربة فيديو آخر.",
+                        "key_insights": [], "bullet_notes": [], "timestamps": []
+                    }}
+                return {"metadata": metadata, "transcript_source": "none", "analysis": {
+                    "summary": "Could not access this video's content. Please try another video.",
+                    "key_insights": [], "bullet_notes": [], "timestamps": []
+                }}
 
         # No subtitles: analyze audio directly with Gemini (one API call instead of transcribe+summarize)
         if transcript_data['source'] == 'gemini_audio':

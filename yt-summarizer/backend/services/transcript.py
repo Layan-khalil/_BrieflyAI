@@ -29,13 +29,8 @@ def get_transcript(url):
     except Exception as e:
         print(f"yt-dlp subtitle error: {type(e).__name__}: {e}", file=sys.stderr)
 
-    # Strategy 4: Download audio via invidious proxy + Gemini analysis
-    audio = _download_audio_invidious(video_id)
-    if audio['source'] == 'gemini_audio':
-        return audio
-
-    # Strategy 5: yt-dlp audio with impersonation
-    return _transcribe_audio_ytdlp(video_id)
+    # No subtitles found — let Gemini analyze the YouTube URL directly (no download needed)
+    return {'source': 'gemini_youtube', 'text': '', 'url': f'https://www.youtube.com/watch?v={video_id}'}
 
 
 def _fetch_transcript_api(video_id):
@@ -161,29 +156,24 @@ def _transcribe_audio_ytdlp(video_id):
     try:
         audio_path = os.path.join(tmpdir, "audio")
 
-        # Find node if available
-        node_path = ""
-        try:
-            nr = subprocess.run(["which", "node"], capture_output=True, text=True, timeout=5)
-            if nr.returncode == 0:
-                node_path = nr.stdout.strip()
-        except:
-            pass
+        # tv_embedded bypasses SABR restrictions; others as fallback
+        clients = ["tv_embedded", "android", "ios", "web"]
+        result = None
+        for client in clients:
+            cmd = [sys.executable, "-m", "yt_dlp",
+                   "-f", "139/249/worstaudio/bestaudio",  # lowest-quality audio formats
+                   "--extractor-args", f"youtube:player_client={client}",
+                   "--no-playlist",
+                   "-o", audio_path + ".%(ext)s",
+                   f"https://www.youtube.com/watch?v={video_id}"]
+            print(f"[yt-dlp] Trying client={client}", file=sys.stderr)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+            if result.returncode == 0:
+                print(f"[yt-dlp] Success with client={client}", file=sys.stderr)
+                break
+            print(f"[yt-dlp] client={client} failed: {result.stderr[-150:]}", file=sys.stderr)
 
-        cmd = [sys.executable, "-m", "yt_dlp", "-f", "worstaudio",
-               "-x", "--audio-format", "mp3", "--audio-quality", "10",
-               "--extractor-args", "youtube:player_client=android",
-               "-o", audio_path + ".%(ext)s",
-               f"https://www.youtube.com/watch?v={video_id}"]
-
-        if node_path:
-            cmd.insert(1, f"--js-runtimes")
-            cmd.insert(2, f"node:{node_path}")
-
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
-
-        if result.returncode != 0:
-            print(f"yt-dlp audio error: {result.stderr[:300]}", file=sys.stderr)
+        if result is None or result.returncode != 0:
             shutil.rmtree(tmpdir, ignore_errors=True)
             return {'source': 'none', 'text': ''}
 

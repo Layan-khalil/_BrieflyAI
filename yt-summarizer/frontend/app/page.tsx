@@ -31,6 +31,20 @@ function formatDuration(seconds: number): string {
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
+function titleToSlug(title: string): string {
+  const stop = new Set(['the','a','an','is','are','was','were','be','been',
+    'your','my','our','their','its','this','that','these','those','and','or',
+    'but','of','in','on','at','to','by','for','with','about','how','what',
+    'why','when','who','which','i','you','he','she','we','they','have','has',
+    'do','does','will','can','just','from','like','as','so','if','am','not']);
+  const words = title
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length > 0 && !stop.has(w));
+  return words.slice(-4).join('_').slice(0, 40);
+}
+
 export default function Home() {
   const [url, setUrl] = useState('');
   const [language, setLanguage] = useState<'en' | 'ar'>('en');
@@ -142,7 +156,8 @@ export default function Home() {
     const blob = new Blob([formatAllSections()], { type: 'text/plain;charset=utf-8' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `brieflyai_summary_${language}.txt`;
+    const slug = metadata ? titleToSlug(metadata.title) : 'summary';
+    a.download = `${slug}_briefly.txt`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
