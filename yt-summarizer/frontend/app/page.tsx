@@ -212,7 +212,7 @@ export default function Home() {
       {/* ─── LANDING ─── */}
       {!loading && !hasResults && (
         <section className="relative z-10 min-h-[calc(100vh-70px)] flex flex-col items-center justify-center">
-          <div className="flex flex-col items-center justify-center text-center px-6 py-16 w-full max-w-[680px] mx-auto">
+          <div className="flex flex-col items-center justify-center text-center px-8 py-16 w-full max-w-[680px] mx-auto">
             <h1 className="text-[clamp(30px,4.4vw,46px)] font-extrabold leading-[1.12] tracking-tight mb-[18px] balance">
               {language === 'ar' ? (
                 <>لخّص أي فيديو <span style={{ color: '#a78bfa' }}>بثوانٍ</span></>
