@@ -82,20 +82,41 @@ def call_gemini(prompt: str) -> str:
     return text
 
 
+def _extract_end_time(transcript: str) -> int:
+    """Return the last timestamp in seconds found in the transcript."""
+    matches = list(re.finditer(r'\[(\d+):(\d+):(\d+)\]|\[(\d+):(\d+)\]', transcript))
+    if not matches:
+        return 0
+    m = matches[-1]
+    if m.group(3) is not None:
+        return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3))
+    return int(m.group(4)) * 60 + int(m.group(5))
+
+
+def _sample_transcript(transcript: str, max_chars: int = 80000) -> str:
+    """If transcript fits, return as-is. Otherwise return beginning + end so timestamps span the full video."""
+    if len(transcript) <= max_chars:
+        return transcript
+    half = max_chars // 2
+    return transcript[:half] + "\n\n...[middle content omitted for brevity]...\n\n" + transcript[-half:]
+
+
 def get_prompt(language: str, title: str, transcript: str, duration: int = 0) -> str:
-    transcript_preview = transcript[:80000]
-    duration_hint = ""
-    if duration > 0:
-        mins = duration // 60
-        secs = duration % 60
-        duration_hint = f"\nVideo duration: {mins}:{secs:02d}"
+    # Derive actual video length from the transcript when metadata doesn't have it
+    end_seconds = _extract_end_time(transcript) if duration == 0 else duration
+    if end_seconds == 0:
+        end_seconds = duration
+
+    def fmt(secs):
+        h, rem = divmod(secs, 3600)
+        m, s = divmod(rem, 60)
+        return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+    transcript_preview = _sample_transcript(transcript)
 
     if language == 'ar':
-        dur = ""
-        if duration > 0:
-            mins = duration // 60
-            secs = duration % 60
-            dur = f"\nمدة الفيديو: {mins}:{secs:02d}"
+        dur = f"\nمدة الفيديو: {fmt(end_seconds)}" if end_seconds > 0 else ""
+        end_hint = f"\nالفيديو ينتهي عند: {fmt(end_seconds)} — يجب أن تمتد الطوابع الزمنية حتى نهاية الفيديو." if end_seconds > 0 else ""
         return f"""Respond only in Arabic. All content must be in Arabic. This is mandatory.
 
 قم بتحليل وتلخيص محتوى هذا الفيديو بالكامل.
@@ -109,8 +130,8 @@ def get_prompt(language: str, title: str, transcript: str, duration: int = 0) ->
 - اكتب كل المحتوى باللغة العربية فقط
 - لا تستخدم علامات ```json أو ```
 - **استخدم الطوابع الزمنية الحقيقية من النص**
-- **وزّع الطوابع الزمنية بالتساوي على الفيديو بالكامل**
-- **يجب أن يكون هناك 5-8 طوابع زمنية**
+- **وزّع الطوابع الزمنية بالتساوي على الفيديو بالكامل من البداية حتى النهاية**
+- **يجب أن يكون هناك 8 طوابع زمنية على الأقل تغطي الفيديو كاملاً**{end_hint}
 
 استخدم هذا التنسيق فقط:
 {{
@@ -123,21 +144,22 @@ def get_prompt(language: str, title: str, transcript: str, duration: int = 0) ->
   ]
 }}"""
     else:
+        dur_hint = f"\nVideo duration: {fmt(end_seconds)}" if end_seconds > 0 else ""
+        end_hint = f"\nThe video ends at {fmt(end_seconds)} — timestamps MUST reach close to the end of the video." if end_seconds > 0 else ""
         return f"""Respond only in English. All content must be in English. This is mandatory.
 
 Analyze and summarize this ENTIRE video content from start to finish.
 
 Video Title: {title}
 
-Transcript (with timestamps): {transcript_preview}{duration_hint}
+Transcript (with timestamps): {transcript_preview}{dur_hint}
 
 **Important Instructions:**
 - Output ONLY valid JSON, no additional text
 - Write everything in English only
 - Do NOT use ```json or ``` markers
 - **Use the REAL timestamps from the transcript**
-- **Distribute timestamps evenly across the FULL video**
-- **Generate 5-8 timestamps**
+- **Generate at least 8 timestamps spread evenly from 0:00 to the end of the video**{end_hint}
 
 Use this exact format only:
 {{
