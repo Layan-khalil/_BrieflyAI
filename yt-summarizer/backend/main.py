@@ -6,7 +6,7 @@ import os
 
 load_dotenv()
 
-from services.transcript import get_transcript, _transcribe_audio_ytdlp
+from services.transcript import get_transcript, _transcribe_audio_ytdlp, _download_audio_invidious
 from services.youtube import get_video_metadata
 from services.gemini import analyze_sync, analyze_from_audio, analyze_from_youtube_url
 from models import SummarizeRequest
@@ -79,7 +79,12 @@ def summarize(req: SummarizeRequest):
                 # Gemini couldn't access this URL — fall back to downloading audio
                 import sys
                 print(f"[Main] YouTube URL failed ({yt_err}), falling back to audio download", file=sys.stderr)
-                audio_data = _transcribe_audio_ytdlp(transcript_data['url'].split('v=')[-1])
+                video_id = transcript_data['url'].split('v=')[-1]
+                # Try yt-dlp first, then Invidious proxy as fallback
+                audio_data = _transcribe_audio_ytdlp(video_id)
+                if audio_data['source'] != 'gemini_audio':
+                    print(f"[Main] yt-dlp failed, trying Invidious audio", file=sys.stderr)
+                    audio_data = _download_audio_invidious(video_id)
                 if audio_data['source'] == 'gemini_audio':
                     analysis = analyze_from_audio(
                         audio_data['audio_path'],
