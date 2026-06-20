@@ -56,18 +56,25 @@ def _fetch_supadata(video_id):
         with httpx.Client(timeout=30) as client:
             resp = client.get("https://api.supadata.ai/v1/transcript", params=params, headers=headers)
 
-        # Async job — poll until done
+        # Async job — poll until done (Whisper can take several minutes for long videos)
         if resp.status_code == 202:
             job_id = resp.json().get("jobId")
             print(f"Supadata: async job {job_id}, polling...", file=sys.stderr)
-            for _ in range(24):
-                time.sleep(5)
-                with httpx.Client(timeout=15) as client:
-                    resp = client.get(f"https://api.supadata.ai/v1/transcript/{job_id}", headers=headers)
-                if resp.status_code == 200:
-                    break
+            for attempt in range(36):
+                time.sleep(10)
+                try:
+                    with httpx.Client(timeout=30) as client:
+                        poll = client.get(f"https://api.supadata.ai/v1/transcript/{job_id}", headers=headers)
+                    print(f"Supadata: poll {attempt+1} → {poll.status_code}", file=sys.stderr)
+                    if poll.status_code == 200:
+                        resp = poll
+                        break
+                    if poll.status_code in (402, 429):
+                        return {'source': 'limit_exceeded'}
+                except Exception as poll_err:
+                    print(f"Supadata: poll error: {poll_err}", file=sys.stderr)
             else:
-                print("Supadata: job timed out", file=sys.stderr)
+                print("Supadata: job timed out after 6 minutes", file=sys.stderr)
                 return None
 
         if resp.status_code in (402, 429):
