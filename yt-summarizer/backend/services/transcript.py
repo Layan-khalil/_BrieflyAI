@@ -1,5 +1,6 @@
 import re
 import sys
+import os
 import httpx
 
 def format_time(seconds):
@@ -13,29 +14,78 @@ def format_time(seconds):
 def get_transcript(url):
     video_id = extract_video_id(url)
 
-    # Strategy 1: youtube-transcript-api (uses YouTube's own timedtext endpoint)
+    # Strategy 1: Supadata API — works on cloud IPs, handles no-subtitle videos via Whisper
+    transcript = _fetch_supadata(video_id)
+    if transcript:
+        return transcript
+
+    # Strategy 2: youtube-transcript-api
     transcript = _fetch_youtube_transcript_api(video_id)
     if transcript:
         return transcript
 
-    # Strategy 2: youtubetranscript.com API (third-party, rarely blocked)
+    # Strategy 3: youtubetranscript.com API
     transcript = _fetch_transcript_api(video_id)
     if transcript:
         return transcript
 
-    # Strategy 3: Invidious proxy instances
+    # Strategy 4: Invidious proxy instances
     transcript = _fetch_invidious(video_id)
     if transcript:
         return transcript
 
-    # Strategy 4: yt-dlp subtitle download with impersonation
+    # Strategy 5: yt-dlp subtitle download
     try:
         return _download_subtitles_ytdlp(video_id)
     except Exception as e:
         print(f"yt-dlp subtitle error: {type(e).__name__}: {e}", file=sys.stderr)
 
-    # No subtitles found — let Gemini analyze the YouTube URL directly (no download needed)
+    # No subtitles found — let Gemini analyze the YouTube URL directly
     return {'source': 'gemini_youtube', 'text': '', 'url': f'https://www.youtube.com/watch?v={video_id}'}
+
+
+def _fetch_supadata(video_id):
+    """Supadata API — bypasses cloud IP blocks, uses Whisper for no-subtitle videos."""
+    import time
+    api_key = os.getenv("SUPADATA_API_KEY")
+    if not api_key:
+        return None
+    try:
+        headers = {"x-api-key": api_key}
+        params = {"url": f"https://www.youtube.com/watch?v={video_id}"}
+        with httpx.Client(timeout=30) as client:
+            resp = client.get("https://api.supadata.ai/v1/transcript", params=params, headers=headers)
+
+        # Async job — poll until done
+        if resp.status_code == 202:
+            job_id = resp.json().get("jobId")
+            print(f"Supadata: async job {job_id}, polling...", file=sys.stderr)
+            for _ in range(24):
+                time.sleep(5)
+                with httpx.Client(timeout=15) as client:
+                    resp = client.get(f"https://api.supadata.ai/v1/transcript/{job_id}", headers=headers)
+                if resp.status_code == 200:
+                    break
+            else:
+                print("Supadata: job timed out", file=sys.stderr)
+                return None
+
+        if resp.status_code != 200:
+            print(f"Supadata error: {resp.status_code}: {resp.text[:200]}", file=sys.stderr)
+            return None
+
+        content = resp.json().get("content", [])
+        if not content:
+            print("Supadata: empty content", file=sys.stderr)
+            return None
+
+        text = ' '.join([f"{format_time(int(s['offset']) // 1000)} {s['text']}" for s in content])
+        print(f"Supadata: got {len(content)} segments", file=sys.stderr)
+        return {'text': text, 'source': 'subtitles'}
+
+    except Exception as e:
+        print(f"Supadata error: {type(e).__name__}: {e}", file=sys.stderr)
+        return None
 
 
 def _fetch_youtube_transcript_api(video_id):
