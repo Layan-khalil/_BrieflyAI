@@ -49,22 +49,29 @@ def _fetch_youtube_transcript_api(video_id):
                 segments = list(YouTubeTranscriptApi.fetch(video_id, languages=langs))
                 if segments:
                     text = ' '.join([f"{format_time(s.start)} {s.text}" for s in segments])
+                    print(f"youtube-transcript-api: got {len(segments)} segments via fetch({langs})", file=sys.stderr)
                     return {'text': text, 'source': 'subtitles'}
-            except Exception:
+            except Exception as e:
+                print(f"youtube-transcript-api fetch({langs}) error: {type(e).__name__}: {e}", file=sys.stderr)
                 continue
 
         # Any available transcript (auto-generated included)
         try:
-            for t in YouTubeTranscriptApi.list(video_id):
-                segments = list(t.fetch())
-                if segments:
-                    text = ' '.join([f"{format_time(s.start)} {s.text}" for s in segments])
-                    return {'text': text, 'source': 'subtitles'}
-        except Exception:
-            pass
+            transcript_list = YouTubeTranscriptApi.list(video_id)
+            for t in transcript_list:
+                try:
+                    segments = list(t.fetch())
+                    if segments:
+                        text = ' '.join([f"{format_time(s.start)} {s.text}" for s in segments])
+                        print(f"youtube-transcript-api: got {len(segments)} segments via list+fetch({t.language_code})", file=sys.stderr)
+                        return {'text': text, 'source': 'subtitles'}
+                except Exception as e:
+                    print(f"youtube-transcript-api list fetch error ({t.language_code}): {type(e).__name__}: {e}", file=sys.stderr)
+        except Exception as e:
+            print(f"youtube-transcript-api list error: {type(e).__name__}: {e}", file=sys.stderr)
 
     except Exception as e:
-        print(f"youtube-transcript-api error: {type(e).__name__}: {e}", file=sys.stderr)
+        print(f"youtube-transcript-api import error: {type(e).__name__}: {e}", file=sys.stderr)
     return None
 
 
