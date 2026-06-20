@@ -13,17 +13,22 @@ def format_time(seconds):
 def get_transcript(url):
     video_id = extract_video_id(url)
 
-    # Strategy 1: youtubetranscript.com API (third-party, rarely blocked)
+    # Strategy 1: youtube-transcript-api (uses YouTube's own timedtext endpoint)
+    transcript = _fetch_youtube_transcript_api(video_id)
+    if transcript:
+        return transcript
+
+    # Strategy 2: youtubetranscript.com API (third-party, rarely blocked)
     transcript = _fetch_transcript_api(video_id)
     if transcript:
         return transcript
 
-    # Strategy 2: Invidious proxy instances
+    # Strategy 3: Invidious proxy instances
     transcript = _fetch_invidious(video_id)
     if transcript:
         return transcript
 
-    # Strategy 3: yt-dlp subtitle download with impersonation
+    # Strategy 4: yt-dlp subtitle download with impersonation
     try:
         return _download_subtitles_ytdlp(video_id)
     except Exception as e:
@@ -31,6 +36,36 @@ def get_transcript(url):
 
     # No subtitles found — let Gemini analyze the YouTube URL directly (no download needed)
     return {'source': 'gemini_youtube', 'text': '', 'url': f'https://www.youtube.com/watch?v={video_id}'}
+
+
+def _fetch_youtube_transcript_api(video_id):
+    """Use youtube-transcript-api library — hits YouTube's own timedtext endpoint."""
+    try:
+        from youtube_transcript_api import YouTubeTranscriptApi
+
+        # Try preferred languages first
+        for langs in [['en', 'en-US', 'en-GB'], ['ar']]:
+            try:
+                segments = list(YouTubeTranscriptApi.fetch(video_id, languages=langs))
+                if segments:
+                    text = ' '.join([f"{format_time(s.start)} {s.text}" for s in segments])
+                    return {'text': text, 'source': 'subtitles'}
+            except Exception:
+                continue
+
+        # Any available transcript (auto-generated included)
+        try:
+            for t in YouTubeTranscriptApi.list(video_id):
+                segments = list(t.fetch())
+                if segments:
+                    text = ' '.join([f"{format_time(s.start)} {s.text}" for s in segments])
+                    return {'text': text, 'source': 'subtitles'}
+        except Exception:
+            pass
+
+    except Exception as e:
+        print(f"youtube-transcript-api error: {type(e).__name__}: {e}", file=sys.stderr)
+    return None
 
 
 def _fetch_transcript_api(video_id):
