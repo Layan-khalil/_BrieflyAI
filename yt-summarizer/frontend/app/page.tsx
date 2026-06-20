@@ -227,7 +227,7 @@ export default function Home() {
               )}
             </p>
 
-            <form onSubmit={handleSubmit} className="flex flex-col sm:flex-row items-stretch gap-3 w-full max-w-[600px]">
+            <form onSubmit={handleSubmit} className="flex flex-col md:flex-row items-stretch gap-3 w-full max-w-[600px]">
               <div className="flex-1 flex items-center gap-3 px-4 rounded-[13px] border transition-all"
                 style={{
                   background: '#15131f',
@@ -262,7 +262,7 @@ export default function Home() {
                 />
               </div>
               <button type="submit" disabled={loading}
-                className="inline-flex items-center justify-center gap-2 px-6 py-[15px] sm:py-0 font-bold text-[15px] rounded-[13px] border-0 whitespace-nowrap transition-all w-full sm:w-auto"
+                className="inline-flex items-center justify-center gap-2 px-6 py-[15px] md:py-0 font-bold text-[15px] rounded-[13px] border-0 whitespace-nowrap transition-all w-full md:w-auto"
                 style={{
                   background: 'linear-gradient(135deg,#8b5cf6,#7c3aed)',
                   color: '#fff',
