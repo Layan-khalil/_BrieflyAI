@@ -42,11 +42,12 @@ def _fetch_youtube_transcript_api(video_id):
     """Use youtube-transcript-api library — hits YouTube's own timedtext endpoint."""
     try:
         from youtube_transcript_api import YouTubeTranscriptApi
+        api = YouTubeTranscriptApi()
 
         # Try preferred languages first
         for langs in [['en', 'en-US', 'en-GB'], ['ar']]:
             try:
-                segments = list(YouTubeTranscriptApi.fetch(video_id, languages=langs))
+                segments = list(api.fetch(video_id, languages=langs))
                 if segments:
                     text = ' '.join([f"{format_time(s.start)} {s.text}" for s in segments])
                     print(f"youtube-transcript-api: got {len(segments)} segments via fetch({langs})", file=sys.stderr)
@@ -57,7 +58,7 @@ def _fetch_youtube_transcript_api(video_id):
 
         # Any available transcript (auto-generated included)
         try:
-            transcript_list = YouTubeTranscriptApi.list(video_id)
+            transcript_list = api.list(video_id)
             for t in transcript_list:
                 try:
                     segments = list(t.fetch())
@@ -122,44 +123,54 @@ def _fetch_invidious(video_id):
 
 def _download_audio_invidious(video_id):
     """Get audio stream URL from Invidious, download it, pass to Gemini."""
-    import subprocess, tempfile, os, shutil, glob
+    import tempfile, os, shutil
     instances = [
         "https://inv.nadeko.net",
         "https://yewtu.be",
+        "https://invidious.privacyredirect.com",
+        "https://inv.tux.pizza",
     ]
     for instance in instances:
         try:
             url = f"{instance}/api/v1/videos/{video_id}"
+            print(f"[Invidious] Trying {instance}", file=sys.stderr)
             with httpx.Client(timeout=15) as client:
                 resp = client.get(url, headers={"User-Agent": "Mozilla/5.0"})
             if resp.status_code != 200:
+                print(f"[Invidious] {instance} returned {resp.status_code}", file=sys.stderr)
                 continue
 
             data = resp.json()
-            # Find best audio-only format
             formats = data.get('adaptiveFormats', []) or data.get('formatStreams', [])
             audio_url = None
             for fmt in formats:
-                if fmt.get('type', '').startswith('audio') or fmt.get('mimeType', '').startswith('audio'):
+                mime = fmt.get('type', '') or fmt.get('mimeType', '')
+                if mime.startswith('audio'):
                     audio_url = fmt.get('url') or fmt.get('audioUrl', '')
+                    print(f"[Invidious] Found audio format: {mime}", file=sys.stderr)
                     break
 
             if not audio_url:
+                print(f"[Invidious] No audio format found at {instance}", file=sys.stderr)
                 continue
 
-            # Download audio
             tmpdir = tempfile.mkdtemp()
             audio_path = os.path.join(tmpdir, "audio.mp4")
+            print(f"[Invidious] Downloading audio from {instance}...", file=sys.stderr)
             with httpx.Client(timeout=300, follow_redirects=True) as client:
                 resp = client.get(audio_url, headers={"User-Agent": "Mozilla/5.0"})
             if resp.status_code == 200:
                 with open(audio_path, 'wb') as f:
                     f.write(resp.content)
-                if os.path.getsize(audio_path) > 1000:
+                size = os.path.getsize(audio_path)
+                print(f"[Invidious] Downloaded {size} bytes", file=sys.stderr)
+                if size > 1000:
                     return {'source': 'gemini_audio', 'text': '', 'audio_path': audio_path, '_tmpdir': tmpdir}
+            else:
+                print(f"[Invidious] Audio download returned {resp.status_code}", file=sys.stderr)
             shutil.rmtree(tmpdir, ignore_errors=True)
         except Exception as e:
-            print(f"Invidious audio error: {e}", file=sys.stderr)
+            print(f"[Invidious] {instance} error: {type(e).__name__}: {e}", file=sys.stderr)
     return {'source': 'none', 'text': ''}
 
 
