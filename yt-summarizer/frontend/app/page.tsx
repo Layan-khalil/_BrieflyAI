@@ -211,8 +211,8 @@ export default function Home() {
 
       {/* ─── LANDING ─── */}
       {!loading && !hasResults && (
-        <section className="relative z-10 min-h-[calc(100vh-70px)] flex flex-col">
-          <div className="flex-1 flex flex-col items-center justify-center text-center px-6 py-16 w-full max-w-[680px] mx-auto">
+        <section className="relative z-10 min-h-[calc(100vh-70px)] flex flex-col items-center justify-center">
+          <div className="flex flex-col items-center justify-center text-center px-6 py-16 w-full max-w-[680px] mx-auto">
             <h1 className="text-[clamp(30px,4.4vw,46px)] font-extrabold leading-[1.12] tracking-tight mb-[18px] balance">
               {language === 'ar' ? (
                 <>لخّص أي فيديو <span style={{ color: '#a78bfa' }}>بثوانٍ</span></>
@@ -227,7 +227,7 @@ export default function Home() {
               )}
             </p>
 
-            <form onSubmit={handleSubmit} className="flex items-stretch gap-3 w-full max-w-[600px]">
+            <form onSubmit={handleSubmit} className="flex flex-col sm:flex-row items-stretch gap-3 w-full max-w-[600px]">
               <div className="flex-1 flex items-center gap-3 px-4 rounded-[13px] border transition-all"
                 style={{
                   background: '#15131f',
@@ -262,7 +262,7 @@ export default function Home() {
                 />
               </div>
               <button type="submit" disabled={loading}
-                className="inline-flex items-center justify-center gap-2 px-6 font-bold text-[15px] rounded-[13px] border-0 whitespace-nowrap transition-all"
+                className="inline-flex items-center justify-center gap-2 px-6 py-[15px] sm:py-0 font-bold text-[15px] rounded-[13px] border-0 whitespace-nowrap transition-all w-full sm:w-auto"
                 style={{
                   background: 'linear-gradient(135deg,#8b5cf6,#7c3aed)',
                   color: '#fff',
@@ -300,8 +300,8 @@ export default function Home() {
 
       {/* ─── LOADING ─── */}
       {loading && (
-        <section className="relative z-10 min-h-[calc(100vh-70px)] flex flex-col">
-          <div className="flex-1 flex flex-col items-center justify-center gap-8 px-6 py-12">
+        <section className="relative z-10 min-h-[calc(100vh-70px)] flex flex-col items-center justify-center">
+          <div className="flex flex-col items-center justify-center gap-8 px-6 py-12 w-full max-w-[480px] mx-auto">
             {/* Orb */}
             <div className="relative w-[120px] h-[120px] grid place-items-center">
               <div className="w-5 h-5 rounded-full" style={{ background: '#8b5cf6', boxShadow: '0 0 36px 6px rgba(124,58,237,0.45)', animation: 'pulse-glow 1.6s ease-in-out infinite' }} />
@@ -349,7 +349,7 @@ export default function Home() {
 
       {/* ─── ERROR ─── */}
       {error && (
-        <div className="relative z-10 max-w-[600px] mx-auto mt-6 px-6">
+        <div className="relative z-10 w-full max-w-[600px] mx-auto mt-6 px-6">
           <div className="flex items-center gap-3 px-4 py-3 rounded-[13px] text-sm" style={{
             background: 'rgba(239,68,68,0.12)',
             border: '1px solid rgba(239,68,68,0.35)',
