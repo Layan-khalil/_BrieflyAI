@@ -39,6 +39,24 @@ def summarize(req: SummarizeRequest):
         # Fetch transcript
         transcript_data = get_transcript(req.url)
 
+        # Monthly limit reached
+        if transcript_data['source'] == 'limit_exceeded':
+            if language == 'ar':
+                msg = {
+                    "summary": "🚫 لقد استنفدنا الحد الشهري لتحليل الفيديوهات. سنعود الشهر القادم! شكراً لاستخدامك BrieflyAI.",
+                    "key_insights": ["سيتم تجديد الحد الشهري في بداية الشهر القادم"],
+                    "bullet_notes": ["يمكنك المحاولة مرة أخرى الشهر القادم"],
+                    "timestamps": []
+                }
+            else:
+                msg = {
+                    "summary": "🚫 We've reached our monthly analysis limit. We'll be back next month! Thank you for using BrieflyAI.",
+                    "key_insights": ["Monthly limit resets at the start of next month"],
+                    "bullet_notes": ["Please try again next month"],
+                    "timestamps": []
+                }
+            return {"metadata": metadata, "transcript_source": "limit_exceeded", "analysis": msg}
+
         # Check if transcript is available
         if transcript_data['source'] == 'none':
             if language == 'ar':

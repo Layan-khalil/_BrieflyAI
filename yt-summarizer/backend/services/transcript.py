@@ -70,6 +70,10 @@ def _fetch_supadata(video_id):
                 print("Supadata: job timed out", file=sys.stderr)
                 return None
 
+        if resp.status_code in (402, 429):
+            print(f"Supadata: monthly limit reached", file=sys.stderr)
+            return {'source': 'limit_exceeded'}
+
         if resp.status_code != 200:
             print(f"Supadata error: {resp.status_code}: {resp.text[:200]}", file=sys.stderr)
             return None
