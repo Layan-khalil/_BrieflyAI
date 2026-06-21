@@ -262,7 +262,7 @@ export default function Home() {
                 />
               </div>
               <button type="submit" disabled={loading}
-                className="inline-flex items-center justify-center gap-2 px-6 py-4 font-bold text-[15px] rounded-[13px] border-0 whitespace-nowrap transition-all w-full"
+                className="flex items-center justify-center gap-2 px-6 py-4 font-bold text-[15px] rounded-[13px] border-0 whitespace-nowrap transition-all w-full"
                 style={{
                   background: 'linear-gradient(135deg,#8b5cf6,#7c3aed)',
                   color: '#fff',
