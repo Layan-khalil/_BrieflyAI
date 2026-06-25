@@ -22,7 +22,7 @@ export async function streamSummary(
 ) {
   try {
     const isLocal = typeof window !== "undefined" && window.location.hostname === "localhost";
-    const baseUrl = isLocal ? "http://localhost:8000" : "https://brieflyai-ggl3.onrender.com";
+    const baseUrl = isLocal ? "http://localhost:8000" : "https://layan123-brieflyai-space.hf.space";
     const res = await fetch(`${baseUrl}/api/summarize`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
